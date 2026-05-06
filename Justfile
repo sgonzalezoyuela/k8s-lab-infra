@@ -56,3 +56,26 @@ infra-down:
 # Generate Talos machine configs (controlplane + worker) with per-node patches.
 talos-config: env-check
     ./talos/scripts/gen-config.sh
+
+# Apply Talos machine configs (insecure mode — VMs are in maintenance mode).
+talos-apply: talos-config
+    ./talos/scripts/wait-maintenance.sh
+    talosctl apply-config --insecure -n $CP_IP  -f _out/cp.yaml
+    talosctl apply-config --insecure -n $WK0_IP -f _out/wk0.yaml
+
+# Bootstrap etcd on the control plane (idempotent).
+talos-bootstrap: talos-apply
+    ./talos/scripts/wait-secure.sh
+    ./talos/scripts/bootstrap-once.sh
+
+# Fetch the kubeconfig from the control plane.
+kubeconfig: talos-bootstrap
+    talosctl kubeconfig --talosconfig _out/talosconfig -n $CP_IP $KUBECONFIG --force
+
+# End-to-end: build the image, create VMs, configure Talos, bootstrap, and fetch kubeconfig.
+cluster-up: talos-image infra-up talos-config talos-apply talos-bootstrap kubeconfig
+    ./talos/scripts/wait-nodes-ready.sh
+
+# Tear down the cluster (destroys VMs + cleans local artifacts).
+cluster-down: infra-down
+    rm -f $KUBECONFIG _out/cp.yaml _out/wk0.yaml _out/patches/cp.yaml _out/patches/wk0.yaml

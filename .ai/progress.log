@@ -16,3 +16,4 @@
 2026-05-06T14:22:14.655Z [IMPLEMENTED] <talos.image-factory-schematic> Implemented feature talos.image-factory-schematic (awaiting review)
 2026-05-06T14:26:50.495Z [IMPLEMENTED] <infra.opentofu.proxmox-vms> Implemented feature infra.opentofu.proxmox-vms (awaiting review)
 2026-05-06T14:38:59.612Z [IMPLEMENTED] <talos.machine-configs> Implemented feature talos.machine-configs (awaiting review)
+2026-05-06T14:43:19.026Z [IMPLEMENTED] <talos.bootstrap-cluster> Implemented feature talos.bootstrap-cluster (awaiting review)

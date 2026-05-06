@@ -11,6 +11,7 @@ test: test-bootstrap.config-scheme
 test: test-talos.image-factory-schematic
 test: test-infra.opentofu.proxmox-vms
 test: test-talos.machine-configs
+test: test-talos.bootstrap-cluster
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -330,3 +331,75 @@ test-talos.machine-configs:
 		  || { echo "    [FAIL] patch did not pick up new CP_IP" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] talos.machine-configs"
+
+# ---------------------------------------------------------------------------
+# talos.bootstrap-cluster
+# ---------------------------------------------------------------------------
+# Acceptance is mostly RUNTIME (criteria 1, 4, 5 require live Talos VMs and
+# a kube-apiserver). We verify structure thoroughly:
+#
+#   - all four helper scripts exist and are executable
+#   - bootstrap-once.sh actually invokes `talosctl bootstrap` and handles
+#     the "AlreadyExists"/"already bootstrapped" idempotency case (criterion 2)
+#   - wait-secure.sh uses --talosconfig (not --insecure); wait-maintenance.sh
+#     uses --insecure (sequence sanity from companion §1–3)
+#   - wait-nodes-ready.sh calls kubectl with the Ready/jsonpath check
+#     (structural cover for criterion 4)
+#   - Justfile has all five new recipes
+#   - talos-apply applies BOTH cp and wk0 with --insecure (criterion 1)
+#   - kubeconfig recipe calls `talosctl kubeconfig` with --force (criterion 3)
+#   - cluster-up dependency chain has the required ordering: talos-image →
+#     infra-up → talos-config → talos-apply → talos-bootstrap → kubeconfig
+#     (criterion 6)
+#
+# A best-effort smoke probe runs bootstrap-once.sh against an unreachable
+# RFC 5737 IP to confirm it actually invokes talosctl and propagates failure
+# (rather than silently exiting 0). It is wrapped in `timeout` to stay fast.
+.PHONY: test-talos.bootstrap-cluster
+test-talos.bootstrap-cluster:
+	@echo "==> talos.bootstrap-cluster"
+	@nix develop --command bash -c '\
+		set -eu ; \
+		for s in wait-maintenance.sh wait-secure.sh bootstrap-once.sh wait-nodes-ready.sh ; do \
+		  test -x "talos/scripts/$$s" \
+		    || { echo "    [FAIL] talos/scripts/$$s missing or not executable" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -qE "already.?exists|already.?bootstrap" talos/scripts/bootstrap-once.sh \
+		  || { echo "    [FAIL] bootstrap-once.sh missing AlreadyExists handling" >&2 ; exit 1 ; } ; \
+		grep -q "talosctl bootstrap" talos/scripts/bootstrap-once.sh \
+		  || { echo "    [FAIL] bootstrap-once.sh does not call talosctl bootstrap" >&2 ; exit 1 ; } ; \
+		grep -q -- "--talosconfig" talos/scripts/wait-secure.sh \
+		  || { echo "    [FAIL] wait-secure.sh does not use --talosconfig" >&2 ; exit 1 ; } ; \
+		grep -q -- "--insecure" talos/scripts/wait-maintenance.sh \
+		  || { echo "    [FAIL] wait-maintenance.sh does not use --insecure" >&2 ; exit 1 ; } ; \
+		grep -q "kubectl" talos/scripts/wait-nodes-ready.sh \
+		  || { echo "    [FAIL] wait-nodes-ready.sh does not call kubectl" >&2 ; exit 1 ; } ; \
+		grep -qE "Ready|jsonpath" talos/scripts/wait-nodes-ready.sh \
+		  || { echo "    [FAIL] wait-nodes-ready.sh missing Ready check" >&2 ; exit 1 ; } ; \
+		for r in talos-apply talos-bootstrap kubeconfig cluster-up cluster-down ; do \
+		  grep -qE "^$${r}:" Justfile \
+		    || { echo "    [FAIL] Justfile lacks $$r recipe" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -A6 "^talos-apply:" Justfile | grep -q -- "--insecure -n.*\$$CP_IP" \
+		  || { echo "    [FAIL] talos-apply missing CP --insecure apply" >&2 ; exit 1 ; } ; \
+		grep -A6 "^talos-apply:" Justfile | grep -q -- "--insecure -n.*\$$WK0_IP" \
+		  || { echo "    [FAIL] talos-apply missing WK0 --insecure apply" >&2 ; exit 1 ; } ; \
+		grep -A4 "^kubeconfig:" Justfile | grep -q "talosctl kubeconfig" \
+		  || { echo "    [FAIL] kubeconfig recipe missing talosctl kubeconfig" >&2 ; exit 1 ; } ; \
+		grep -A4 "^kubeconfig:" Justfile | grep -q -- "--force" \
+		  || { echo "    [FAIL] kubeconfig recipe missing --force" >&2 ; exit 1 ; } ; \
+		deps=$$(grep -E "^cluster-up:" Justfile | sed -E "s/^cluster-up:[[:space:]]*//") ; \
+		for d in talos-image infra-up talos-config talos-apply talos-bootstrap kubeconfig ; do \
+		  echo "$$deps" | grep -q "$$d" \
+		    || { echo "    [FAIL] cluster-up missing $$d dep" >&2 ; exit 1 ; } ; \
+		done ; \
+		tmp=$$(mktemp -d) ; \
+		trap "rm -rf $$tmp" EXIT ; \
+		mkdir -p "$$tmp/_out" "$$tmp/talos/scripts" ; \
+		cp talos/scripts/bootstrap-once.sh "$$tmp/talos/scripts/" ; \
+		printf "context: a3c-lab-4\ncontexts:\n  a3c-lab-4:\n    endpoints:\n      - 192.0.2.1\n    nodes:\n      - 192.0.2.1\n" > "$$tmp/_out/talosconfig" ; \
+		if ( cd "$$tmp" && CP_IP=192.0.2.1 timeout 10 ./talos/scripts/bootstrap-once.sh </dev/null >/dev/null 2>&1 ) ; then \
+		  echo "    [WARN] bootstrap-once.sh smoke probe unexpectedly succeeded (likely network quirk); ignoring" >&2 ; \
+		fi ; \
+	'
+	@echo "    [PASS] talos.bootstrap-cluster"

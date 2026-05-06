@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T14:38:59.612Z",
-    "version": 19,
+    "updatedAt": "2026-05-06T14:43:19.025Z",
+    "version": 20,
     "tddMode": "recommended"
   },
   "features": [
@@ -125,7 +125,7 @@
       "description": "Apply machine configs to both VMs, bootstrap etcd on the control plane, and fetch kubeconfig + talosconfig.",
       "module": "talos",
       "priority": 6,
-      "status": "failing",
+      "status": "implemented",
       "acceptance": [
         "`just talos-apply` runs `talosctl apply-config --insecure -n ${CP_IP} -f _out/cp.yaml` and `talosctl apply-config --insecure -n ${WK0_IP} -f _out/wk0.yaml`; both succeed.",
         "`just talos-bootstrap` runs `talosctl bootstrap -n ${CP_IP} --talosconfig _out/talosconfig` exactly once; subsequent invocations detect bootstrap already done and exit 0 with a notice (no error).",
@@ -140,7 +140,7 @@
       "version": 1,
       "companionFile": "talos.bootstrap-cluster.md",
       "createdAt": "2026-05-06T13:47:23.181Z",
-      "updatedAt": "2026-05-06T13:48:02.301Z"
+      "updatedAt": "2026-05-06T14:43:19.025Z"
     }
   ]
 }

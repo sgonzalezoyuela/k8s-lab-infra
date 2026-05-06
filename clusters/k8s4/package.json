@@ -1,0 +1,9 @@
+{
+  "name": "a3c-lab-cluster-k8s4",
+  "version": "0.1.0",
+  "description": "Patagon harness wrapper for cluster k8s4. `npm test` runs the shared tools/ structural tests AND this cluster's smoke target.",
+  "private": true,
+  "scripts": {
+    "test": "cd ../../tools && nix develop --command make test && cd ../clusters/k8s4 && nix develop --command bash -c 'TOOLS_DIR=$(realpath ../../tools) make -f Makefile smoke'"
+  }
+}

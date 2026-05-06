@@ -1,0 +1,111 @@
+# Shared Justfile. Always invoked through $JUST_JUSTFILE (set by the cluster
+# nix develop shell), with cwd = clusters/<name>/. Recipes therefore operate
+# on cluster-local files (.env, _out/, infra/cluster.tfvars) and reach into
+# the shared library via $TOOLS_DIR.
+#
+# Recipes are tagged [no-cd] so just does NOT cd into the directory of the
+# Justfile (which lives under tools/). They run in the operator's cwd, which
+# is the cluster directory when invoked through the cluster nix develop shell.
+set dotenv-load
+
+[no-cd]
+default:
+    @just --list
+
+# Create or update .env from $TOOLS_DIR/.env.example, prompting for required-empty values.
+[no-cd]
+init-config:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f .env ]; then
+      cp "$TOOLS_DIR/.env.example" .env
+      echo "Created .env from $TOOLS_DIR/.env.example"
+    fi
+    for var in PROXMOX_API_TOKEN_SECRET; do
+      current=$(grep -E "^${var}=" .env | cut -d= -f2-)
+      if [ -z "$current" ]; then
+        read -r -s -p "Value for $var: " val; echo
+        sed -i "s|^${var}=.*|${var}=${val}|" .env
+      fi
+    done
+
+# Verify every variable defined in $TOOLS_DIR/.env.example is set and non-empty in .env.
+[no-cd]
+env-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    missing=()
+    while IFS= read -r line; do
+      [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
+      var=$(echo "$line" | cut -d= -f1)
+      val=$(grep -E "^${var}=" .env 2>/dev/null | cut -d= -f2- || true)
+      [ -z "$val" ] && missing+=("$var")
+    done < "$TOOLS_DIR/.env.example"
+    if [ ${#missing[@]} -gt 0 ]; then
+      echo "Missing or empty in .env: ${missing[*]}" >&2
+      exit 1
+    fi
+    echo "env OK"
+
+# Build Talos Image Factory schematic, download ISO, upload to Proxmox.
+[no-cd]
+talos-image: env-check
+    "$TOOLS_DIR/talos/scripts/build-image.sh"
+
+# Render infra/cluster.tfvars from .env + _out/talos-schematic-id.
+[no-cd]
+infra-render: env-check
+    "$TOOLS_DIR/talos/scripts/render-tfvars.sh"
+
+# Print the scp commands required to place the Talos NoCloud user-data snippets.
+[no-cd]
+snippets-cmd: env-check
+    "$TOOLS_DIR/talos/scripts/print-snippet-upload-cmd.sh"
+
+# Apply OpenTofu — creates the Talos VMs that consume the (already-placed) snippets.
+[no-cd]
+infra-up: talos-image talos-config infra-render
+    cd infra && tofu init -upgrade && tofu apply -auto-approve -var-file=cluster.tfvars
+
+# Destroy the VMs.
+[no-cd]
+infra-down:
+    cd infra && tofu destroy -auto-approve -var-file=cluster.tfvars
+
+# Generate Talos machine configs (controlplane + worker) with per-node patches.
+[no-cd]
+talos-config: env-check
+    "$TOOLS_DIR/talos/scripts/gen-config.sh"
+
+# Fallback only: apply Talos machine configs manually.
+[no-cd]
+talos-apply: talos-config
+    "$TOOLS_DIR/talos/scripts/wait-maintenance.sh"
+    talosctl apply-config --insecure -n $CP_IP  -f _out/cp.yaml
+    talosctl apply-config --insecure -n $WK0_IP -f _out/wk0.yaml
+
+# Bootstrap etcd on the control plane (idempotent).
+[no-cd]
+talos-bootstrap: infra-up
+    "$TOOLS_DIR/talos/scripts/wait-secure.sh"
+    "$TOOLS_DIR/talos/scripts/bootstrap-once.sh"
+
+# Fetch the kubeconfig from the control plane.
+[no-cd]
+kubeconfig: talos-bootstrap
+    talosctl kubeconfig --talosconfig _out/talosconfig -n $CP_IP $KUBECONFIG --force
+
+# End-to-end: build the NoCloud image, generate configs, create VMs, bootstrap, and fetch kubeconfig.
+[no-cd]
+cluster-up: talos-image talos-config infra-up talos-bootstrap kubeconfig
+    "$TOOLS_DIR/talos/scripts/wait-nodes-ready.sh"
+
+# Tear down the cluster (destroys VMs + cleans local artifacts).
+[no-cd]
+cluster-down: infra-down
+    rm -f $KUBECONFIG _out/cp.yaml _out/wk0.yaml _out/patches/cp.yaml _out/patches/wk0.yaml
+
+# Scaffold a new cluster directory under clusters/<name>/.
+[no-cd]
+new-cluster name:
+    "$TOOLS_DIR/scripts/new-cluster.sh" "{{name}}"

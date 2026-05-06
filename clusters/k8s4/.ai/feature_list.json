@@ -1,0 +1,205 @@
+{
+  "metadata": {
+    "projectName": "a3c-lab-4",
+    "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
+    "createdAt": "2026-05-06T13:45:51.534Z",
+    "updatedAt": "2026-05-06T19:01:09.624Z",
+    "version": 29,
+    "tddMode": "recommended"
+  },
+  "features": [
+    {
+      "id": "bootstrap.nix-flake-tools",
+      "description": "Extend nix flake with OpenTofu, yq, jq; keep existing tools and devShell banner.",
+      "module": "bootstrap",
+      "priority": 1,
+      "status": "implemented",
+      "acceptance": [
+        "`nix develop` enters the shell and prints the existing 'Atricore k8s2 #4' banner without errors.",
+        "`tofu version` reports OpenTofu >= 1.7 inside the devShell.",
+        "`yq --version` and `jq --version` succeed inside the devShell.",
+        "All previously-listed tools remain in PATH: kubectl, kubecolor, kustomize, kubeseal, helm, k9s, openssl, talosctl, cmctl, just, envsubst, argo, crane.",
+        "Existing devShell exports remain intact: A3C_HOME, CP_IP, WK0_IP, KUBECONFIG, TALOSCONFIG.",
+        "flake.lock is regenerated and committed."
+      ],
+      "dependsOn": [],
+      "version": 1,
+      "createdAt": "2026-05-06T13:46:21.527Z",
+      "updatedAt": "2026-05-06T14:16:23.795Z"
+    },
+    {
+      "id": "bootstrap.config-scheme",
+      "description": "Establish .env scheme, secrets/ layout, .gitignore, and Justfile skeleton with init-config and env-check recipes.",
+      "module": "bootstrap",
+      "priority": 2,
+      "status": "implemented",
+      "acceptance": [
+        "`.env.example` exists at repo root with all variables documented inline (Proxmox, cluster identity, nodes, network, VM sizing, Talos version, MetalLB range, CA paths).",
+        "`Justfile` exists with `set dotenv-load` and recipes: `default` (lists recipes), `init-config`, `env-check`.",
+        "`just init-config` on a clean checkout (no .env) creates `.env` from `.env.example` and prompts for required-empty values (PROXMOX_API_TOKEN_SECRET at minimum); idempotent (re-running with .env present is a no-op or only prompts for new vars).",
+        "`just env-check` exits 0 when every variable in `.env.example` is set and non-empty in `.env`; exits 1 with a clear message naming any missing vars.",
+        "`secrets/` directory exists with `.gitkeep` and `README.md` (explains the directory holds CA material and other gitignored secrets).",
+        "`.gitignore` excludes: `.env`, `secrets/*` (with `!secrets/.gitkeep` and `!secrets/README.md` exceptions), `_out/`, `.terraform/`, `.terraform.lock.hcl`, `*.tfstate*`, `*.tfvars` (with `!*.tfvars.example` exception).",
+        "Existing `.gitignore` entries (kubeconfig, talosconfig, tmp, jpkl) are preserved."
+      ],
+      "dependsOn": [
+        "bootstrap.nix-flake-tools"
+      ],
+      "version": 1,
+      "companionFile": "bootstrap.config-scheme.md",
+      "createdAt": "2026-05-06T13:46:35.169Z",
+      "updatedAt": "2026-05-06T14:19:07.078Z"
+    },
+    {
+      "id": "talos.image-factory-schematic",
+      "description": "Generate a Talos Image Factory schematic with qemu-guest-agent + iscsi-tools + util-linux-tools, download the matching ISO, and upload it to Proxmox ISO storage.",
+      "module": "talos",
+      "priority": 3,
+      "status": "implemented",
+      "acceptance": [
+        "`just talos-image` runs end-to-end and is idempotent.",
+        "Schematic JSON includes exactly these system extensions: `siderolabs/qemu-guest-agent`, `siderolabs/iscsi-tools`, `siderolabs/util-linux-tools`.",
+        "Schematic ID is POSTed to `https://factory.talos.dev/schematics` and the returned id is persisted to `_out/talos-schematic-id`.",
+        "ISO is downloaded from `https://factory.talos.dev/image/<schematic-id>/<TALOS_VERSION>/metal-amd64.iso` to `_out/talos-<TALOS_VERSION>-<schematic-id-short>.iso`.",
+        "ISO is uploaded to Proxmox storage `${PROXMOX_ISO_STORAGE}` on node `${PROXMOX_NODE}` via the Proxmox API; subsequent runs detect existing remote ISO and skip upload.",
+        "Recipe fails fast with a clear error if `just env-check` would fail."
+      ],
+      "dependsOn": [
+        "bootstrap.config-scheme"
+      ],
+      "version": 1,
+      "companionFile": "talos.image-factory-schematic.md",
+      "createdAt": "2026-05-06T13:46:44.804Z",
+      "updatedAt": "2026-05-06T14:22:14.655Z"
+    },
+    {
+      "id": "infra.opentofu.proxmox-vms",
+      "description": "OpenTofu module provisioning CP + WK0 VMs on Proxmox via bpg/proxmox provider, parameterized by .env-derived tfvars.",
+      "module": "infra",
+      "priority": 4,
+      "status": "implemented",
+      "acceptance": [
+        "`infra/` directory contains: `providers.tf`, `variables.tf`, `main.tf`, `outputs.tf`, `cluster.tfvars.example`, `cluster.tfvars.tpl`.",
+        "Provider is `bpg/proxmox` pinned to a known-good version (>= 0.66, < 1.0); `tofu init` and `tofu validate` succeed.",
+        "`just infra-render` produces `infra/cluster.tfvars` from `.env` via envsubst, populating proxmox endpoint, token, node, storage pool, ISO file id, and per-role VM sizing (cp_cores/cp_memory_mb/cp_disk_size_gb, wk_cores/wk_memory_mb/wk_disk_size_gb/wk_storage_disk_size_gb).",
+        "`just infra-up` runs `tofu apply -auto-approve -var-file=cluster.tfvars` and creates exactly two VMs on `${PROXMOX_NODE}`: cp-${CLUSTER_NAME} and wk0-${CLUSTER_NAME}.",
+        "CP VM: `${CP_CORES}` cores, `${CP_MEMORY_MB}` MiB memory, ONE disk on `${PROXMOX_STORAGE_POOL}` of size `${CP_DISK_SIZE_GB}` GiB (scsi0/OS), NIC on bridge `${NETWORK_BRIDGE}` with no VLAN, ISO mounted as cdrom (ide3) from the schematic-built ISO.",
+        "WK0 VM: `${WK_CORES}` cores, `${WK_MEMORY_MB}` MiB memory, TWO disks on `${PROXMOX_STORAGE_POOL}` (scsi0 OS = `${WK_DISK_SIZE_GB}` GiB, scsi1 storage = `${WK_STORAGE_DISK_SIZE_GB}` GiB; the second disk is reserved for Longhorn and untouched by Talos), NIC on `${NETWORK_BRIDGE}` no VLAN, ISO mounted as cdrom (ide3).",
+        "Each VM has boot order set so it boots from the cdrom (Talos ISO) on first boot, then from disk after install; VMs are powered on after apply.",
+        "`just infra-down` runs `tofu destroy -auto-approve -var-file=cluster.tfvars` and removes both VMs cleanly.",
+        "Re-running `just infra-up` against an existing apply is a no-op (`tofu plan` shows no changes).",
+        "Outputs expose VM ids and configured IPs for downstream features."
+      ],
+      "dependsOn": [
+        "bootstrap.config-scheme",
+        "talos.image-factory-schematic"
+      ],
+      "version": 1,
+      "companionFile": "infra.opentofu.proxmox-vms.md",
+      "createdAt": "2026-05-06T13:46:59.210Z",
+      "updatedAt": "2026-05-06T15:14:46.211Z"
+    },
+    {
+      "id": "talos.machine-configs",
+      "description": "Generate Talos controlplane and worker machine configs with per-node patches (hostname, static IP, gateway, DNS, install disk) under _out/.",
+      "module": "talos",
+      "priority": 5,
+      "status": "implemented",
+      "acceptance": [
+        "`just talos-config` runs `talosctl gen config ${CLUSTER_NAME} https://${CP_IP}:6443 --output-dir _out` once; reuses existing `_out/secrets.yaml` on subsequent runs (does not regenerate cluster PKI).",
+        "Per-node patches written to `_out/patches/cp.yaml` and `_out/patches/wk0.yaml`, each setting: `machine.network.hostname`, `machine.network.interfaces[0]` (deviceSelector by physical:true), addresses (`<IP>/<NETWORK_CIDR>`), default route via `${NETWORK_GATEWAY}`, `machine.network.nameservers` = [`${NETWORK_DNS}`], `machine.install.disk` = `/dev/sda`.",
+        "Final per-node configs at `_out/cp.yaml` and `_out/wk0.yaml` produced via `talosctl machineconfig patch <base> --patch @_out/patches/<node>.yaml`.",
+        "`talosctl validate --config _out/cp.yaml --mode metal` and `--config _out/wk0.yaml --mode metal` both succeed.",
+        "Generated `_out/talosconfig` is patched with endpoints = [`${CP_IP}`] and nodes = [`${CP_IP}`, `${WK0_IP}`].",
+        "Re-running `just talos-config` after editing `.env` regenerates patches and final configs but does NOT regenerate the cluster secrets bundle (`_out/secrets.yaml`)."
+      ],
+      "dependsOn": [
+        "infra.opentofu.proxmox-vms"
+      ],
+      "version": 1,
+      "companionFile": "talos.machine-configs.md",
+      "createdAt": "2026-05-06T13:47:11.953Z",
+      "updatedAt": "2026-05-06T14:38:59.612Z"
+    },
+    {
+      "id": "talos.bootstrap-cluster",
+      "description": "Apply machine configs to both VMs, bootstrap etcd on the control plane, and fetch kubeconfig + talosconfig.",
+      "module": "talos",
+      "priority": 6,
+      "status": "implemented",
+      "acceptance": [
+        "`just talos-apply` runs `talosctl apply-config --insecure -n ${CP_IP} -f _out/cp.yaml` and `talosctl apply-config --insecure -n ${WK0_IP} -f _out/wk0.yaml`; both succeed.",
+        "`just talos-bootstrap` runs `talosctl bootstrap -n ${CP_IP} --talosconfig _out/talosconfig` exactly once; subsequent invocations detect bootstrap already done and exit 0 with a notice (no error).",
+        "`just kubeconfig` writes a valid kubeconfig to `${KUBECONFIG}` (i.e. `_out/kubeconfig` per flake) via `talosctl kubeconfig --talosconfig _out/talosconfig -n ${CP_IP} ${KUBECONFIG} --force`.",
+        "After bootstrap, `kubectl get nodes` lists exactly two nodes (`${CP_HOSTNAME}` and `${WK0_HOSTNAME}`) both in `Ready` state within 5 minutes.",
+        "`kubectl get pods -A` shows kube-system pods (kube-apiserver, etcd, kube-controller-manager, kube-scheduler, kube-proxy, flannel) all `Running` or `Completed`.",
+        "`just cluster-up` exists as an aggregate recipe ordering: `talos-image` → `infra-up` → wait for VMs → `talos-config` → `talos-apply` → wait for secure API → `talos-bootstrap` → `kubeconfig` → wait for nodes Ready."
+      ],
+      "dependsOn": [
+        "talos.machine-configs"
+      ],
+      "version": 1,
+      "companionFile": "talos.bootstrap-cluster.md",
+      "createdAt": "2026-05-06T13:47:23.181Z",
+      "updatedAt": "2026-05-06T14:43:19.025Z"
+    },
+    {
+      "id": "talos.nocloud-proxmox-cloudinit",
+      "description": "Boot Talos with the NoCloud image and use Proxmox cloud-init/NoCloud data to provide Talos machine config and static network config at first boot, avoiding temporary DHCP IP discovery.",
+      "module": "talos",
+      "priority": 7,
+      "status": "implemented",
+      "acceptance": [
+        "Talos Image Factory build/request flow uses the NoCloud platform/image variant required by Talos NoCloud datasource support, while preserving required system extensions.",
+        "OpenTofu/Proxmox VM definitions attach or configure a Proxmox cloud-init/NoCloud datasource for each Talos VM instead of relying on normal guest cloud-init inside Talos.",
+        "Each node receives its Talos machine config as NoCloud `user-data` and static network settings for its configured IP, gateway, and DNS as NoCloud/Proxmox network data before first boot.",
+        "The workflow no longer requires discovering random DHCP maintenance IPs before applying Talos configs, and Talos apply/bootstrap commands target the configured static IPs after first boot.",
+        "Operator-facing docs explain that Talos does not run generic cloud-init, but does parse NoCloud when booted with the NoCloud Talos image, and document any Proxmox snippet/storage requirements.",
+        "Existing structural tests cover the NoCloud image selection, cloud-init datasource wiring, static IP config, and docs guidance without requiring live Proxmox or Talos access."
+      ],
+      "dependsOn": [
+        "talos.image-factory-schematic",
+        "talos.machine-configs",
+        "infra.opentofu.proxmox-vms"
+      ],
+      "notes": "User provided Talos v1.13 NoCloud docs. Correct design is not generic cloud-init in Talos, but Talos NoCloud datasource support. Proxmox cloud-init can provide NoCloud user-data/network-config when booting the NoCloud image. Proxmox docs path uses cicustom user=local:snippets/<node>.yml where snippet content is the Talos machine config; snippets may need placement/upload support.",
+      "version": 1,
+      "companionFile": "talos.nocloud-proxmox-cloudinit.md",
+      "createdAt": "2026-05-06T15:55:21.150Z",
+      "updatedAt": "2026-05-06T16:01:29.427Z"
+    },
+    {
+      "id": "bootstrap.split-tools-and-clusters",
+      "description": "Restructure the repo into a monorepo with a reusable tools/ library and per-cluster workspaces under clusters/<name>/, each with its own pinned Talos version, .env, state, and patagon backlog. Migrate the existing k8s4 cluster in place.",
+      "module": "bootstrap",
+      "priority": 8,
+      "status": "implemented",
+      "acceptance": [
+        "Repo has top-level `flake.nix`, `tools/`, and `clusters/` directories. The root flake exposes `lib.<system>.mkClusterShell` accepting per-cluster `pkgs`, `clusterName`, `talosVersion`, and optional metalLBRange.",
+        "All reusable assets live under `tools/`: scripts (`tools/talos/scripts/`), patches (`tools/talos/patches/`), schematic (`tools/talos/schematic.yaml`), the OpenTofu MODULE (`tools/infra/`), `tools/Justfile`, `tools/Makefile`, `tools/package.json`, `tools/.env.example`, and `tools/docs/INIT-CLUSTER.md`. There are no remaining top-level copies of these files.",
+        "Every script under `tools/talos/scripts/` enforces `${TOOLS_DIR:?...}` and resolves all input asset paths via `$TOOLS_DIR`; outputs go to `$PWD/_out` and `$PWD/infra` (the cluster directory). Running scripts outside a cluster shell exits with a clear error.",
+        "`tools/Justfile` declares `set working-directory := invocation_directory()` and references shared assets via `$TOOLS_DIR/...` so recipes invoked from a cluster directory operate on cluster state.",
+        "`tools/Makefile` accepts `TOOLS_DIR` (defaulting to its own directory) and references all shared assets via `$(TOOLS_DIR)/...`. The structural test fixtures export `TOOLS_DIR` correctly. Running `make test` from `tools/` passes all existing structural tests, including the gateway-on-link route assertion.",
+        "The existing cluster lives at `clusters/k8s4/` with its own `flake.nix` (pinned `nixpkgs` + `talosVersion = \"v1.13.0\"`, importing `path:../..` and calling `monorepo.lib.<system>.mkClusterShell`), `.env`, `_out/`, `secrets/`, `.ai/`, and `infra/` (wrapper `main.tf`, mirrored `variables.tf`, `outputs.tf`, plus the migrated `terraform.tfstate` with addresses moved under `module.cluster.*`). `tofu plan` reports no changes against the live infrastructure.",
+        "Per-cluster Talos version is sourced from the cluster `flake.nix` only; `TALOS_VERSION` is exported by the dev shell. `tools/.env.example` does not contain `TALOS_VERSION`. Scripts read `$TALOS_VERSION` from the environment.",
+        "A `clusters/_scaffold/` template exists and is consumed by `just new-cluster <name>` (a recipe in `tools/Justfile` invoking `tools/scripts/new-cluster.sh`). Running `just new-cluster k8s5-test` in a temp area produces a self-consistent cluster directory with substituted placeholders.",
+        "`clusters/k8s4/` has its own minimal `Makefile` (or equivalent) providing a `smoke` target that asserts the cluster's `.env` is complete and the wrapper `tofu validate` succeeds, runnable from inside the cluster's `nix develop` shell.",
+        "Operator-facing docs (`tools/docs/INIT-CLUSTER.md` plus a top-level `README.md`) explain the new layout, the `cd clusters/<name> && nix develop` workflow, how to bump Talos per cluster, and how to add a new cluster with `just new-cluster`."
+      ],
+      "dependsOn": [
+        "bootstrap.nix-flake-tools",
+        "bootstrap.config-scheme",
+        "talos.image-factory-schematic",
+        "infra.opentofu.proxmox-vms",
+        "talos.machine-configs",
+        "talos.bootstrap-cluster",
+        "talos.nocloud-proxmox-cloudinit"
+      ],
+      "notes": "Approved design captured in chat (split tools/ and clusters/ in a monorepo). Migration must preserve the live cluster: tofu state addresses move from root resources to module.cluster.*, verified by tofu plan == no-change. Per-cluster nixpkgs pin is the single source of truth for talosctl + TALOS_VERSION.",
+      "version": 1,
+      "companionFile": "bootstrap.split-tools-and-clusters.md",
+      "createdAt": "2026-05-06T18:36:12.359Z",
+      "updatedAt": "2026-05-06T19:01:09.624Z"
+    }
+  ]
+}

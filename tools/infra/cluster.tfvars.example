@@ -1,0 +1,24 @@
+# Example tfvars. The real file (cluster.tfvars) is rendered from .env via
+# `just infra-render` and is gitignored. Keep this in sync with variables.tf.
+
+proxmox_endpoint         = "https://pve.example.com:8006/api2/json"
+proxmox_api_token_id     = "root@pam!terraform"
+proxmox_api_token_secret = "REPLACE-ME-UUID"
+proxmox_insecure         = false
+proxmox_node             = "pve"
+proxmox_storage_pool     = "local-lvm"
+proxmox_snippet_storage  = "local"
+talos_iso_file_id        = "local:iso/talos-v1.13.0-deadbeef-nocloud.iso"
+network_bridge           = "vmbr0"
+cluster_name             = "k8s4"
+cp_cores                 = 4
+cp_memory_mb             = 4096
+cp_disk_size_gb          = 30
+wk_cores                 = 8
+wk_memory_mb             = 8192
+wk_disk_size_gb          = 30
+wk_storage_disk_size_gb  = 200
+cp_hostname              = "cp.k8s4.lab.example"
+cp_ip                    = "10.4.0.1"
+wk0_hostname             = "wk0.k8s4.lab.example"
+wk0_ip                   = "10.4.0.10"

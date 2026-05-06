@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T13:48:02.301Z",
-    "version": 14,
+    "updatedAt": "2026-05-06T14:16:23.795Z",
+    "version": 15,
     "tddMode": "recommended"
   },
   "features": [
@@ -13,7 +13,7 @@
       "description": "Extend nix flake with OpenTofu, yq, jq; keep existing tools and devShell banner.",
       "module": "bootstrap",
       "priority": 1,
-      "status": "failing",
+      "status": "implemented",
       "acceptance": [
         "`nix develop` enters the shell and prints the existing 'Atricore k8s2 #4' banner without errors.",
         "`tofu version` reports OpenTofu >= 1.7 inside the devShell.",
@@ -24,7 +24,8 @@
       ],
       "dependsOn": [],
       "version": 1,
-      "createdAt": "2026-05-06T13:46:21.527Z"
+      "createdAt": "2026-05-06T13:46:21.527Z",
+      "updatedAt": "2026-05-06T14:16:23.795Z"
     },
     {
       "id": "bootstrap.config-scheme",

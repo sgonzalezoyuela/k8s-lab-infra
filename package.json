@@ -1,0 +1,9 @@
+{
+  "name": "a3c-lab-4",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Talos+Proxmox K8s lab cluster. Test runner wrapper: delegates to `nix develop --command make test` so the patagon harness can invoke project tests via npm.",
+  "scripts": {
+    "test": "nix develop --command make test"
+  }
+}

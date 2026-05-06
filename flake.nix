@@ -4,6 +4,7 @@
   #inputs.nixpkgs.url = "github:NixOS/nixpkgs/ba52980377166b499e46a0d73ccec49ace678c09";
 
   outputs = {
+    self,
     nixpkgs,
   }: let
     supportedSystems = ["x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin"];
@@ -25,7 +26,7 @@
           kubectl
           kustomize
           kubeseal
-          argo
+          argo-workflows
           kubernetes-helm
           k9s
           openssl
@@ -35,6 +36,9 @@
           zsh
           envsubst
           just
+          opentofu
+          yq-go
+          jq
         ];
         shellHook = ''
           echo
@@ -83,7 +87,11 @@
           compdef kubecolor=kubectl
           ZSHRC
 
-          exec ${pkgs.zsh}/bin/zsh
+          # Only drop into zsh for an interactive session; respect
+          # `nix develop --command ...` (used by tests/CI).
+          if [ -z "$NIX_DEVELOP_NO_ZSH" ] && [ -t 0 ] && [ -t 1 ]; then
+            exec ${pkgs.zsh}/bin/zsh
+          fi
         '';
       };
     });

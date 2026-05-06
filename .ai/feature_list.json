@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T14:16:23.795Z",
-    "version": 15,
+    "updatedAt": "2026-05-06T14:19:07.078Z",
+    "version": 16,
     "tddMode": "recommended"
   },
   "features": [
@@ -32,7 +32,7 @@
       "description": "Establish .env scheme, secrets/ layout, .gitignore, and Justfile skeleton with init-config and env-check recipes.",
       "module": "bootstrap",
       "priority": 2,
-      "status": "failing",
+      "status": "implemented",
       "acceptance": [
         "`.env.example` exists at repo root with all variables documented inline (Proxmox, cluster identity, nodes, network, VM sizing, Talos version, MetalLB range, CA paths).",
         "`Justfile` exists with `set dotenv-load` and recipes: `default` (lists recipes), `init-config`, `env-check`.",
@@ -48,7 +48,7 @@
       "version": 1,
       "companionFile": "bootstrap.config-scheme.md",
       "createdAt": "2026-05-06T13:46:35.169Z",
-      "updatedAt": "2026-05-06T13:48:00.286Z"
+      "updatedAt": "2026-05-06T14:19:07.078Z"
     },
     {
       "id": "talos.image-factory-schematic",

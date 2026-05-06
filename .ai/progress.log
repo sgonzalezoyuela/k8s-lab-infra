@@ -12,3 +12,4 @@
 2026-05-06T13:48:01.961Z [UPDATE] <talos.machine-configs> Updated feature talos.machine-configs | fields=companionFile
 2026-05-06T13:48:02.301Z [UPDATE] <talos.bootstrap-cluster> Updated feature talos.bootstrap-cluster | fields=companionFile
 2026-05-06T14:16:23.795Z [IMPLEMENTED] <bootstrap.nix-flake-tools> Implemented feature bootstrap.nix-flake-tools (awaiting review)
+2026-05-06T14:19:07.078Z [IMPLEMENTED] <bootstrap.config-scheme> Implemented feature bootstrap.config-scheme (awaiting review)

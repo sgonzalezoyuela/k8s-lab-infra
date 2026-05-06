@@ -3,3 +3,19 @@ kubeconfig
 talosconfig
 tmp
 
+# config + secrets
+.env
+secrets/*
+!secrets/.gitkeep
+!secrets/README.md
+
+# generated artifacts
+_out/
+
+# OpenTofu / Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example

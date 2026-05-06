@@ -8,6 +8,7 @@
 .PHONY: test
 test: test-bootstrap.nix-flake-tools
 test: test-bootstrap.config-scheme
+test: test-talos.image-factory-schematic
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -119,3 +120,50 @@ test-bootstrap.config-scheme:
 		  || { echo "    [FAIL] init-config should be no-op when .env complete" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] bootstrap.config-scheme"
+
+# ---------------------------------------------------------------------------
+# talos.image-factory-schematic
+# ---------------------------------------------------------------------------
+# Verifies (without hitting the network):
+#   - schematic.yaml lists EXACTLY the three required system extensions (criterion 2)
+#   - build-image.sh exists, is executable, and references the factory URLs,
+#     Proxmox auth header, ISO probe URL, and upload URL (structural cover for
+#     criteria 1, 3, 4, 5)
+#   - Justfile has the talos-image recipe
+#   - build-image.sh fails fast when env is unset (criterion 6)
+.PHONY: test-talos.image-factory-schematic
+test-talos.image-factory-schematic:
+	@echo "==> talos.image-factory-schematic"
+	@nix develop --command bash -c '\
+		set -eu ; \
+		test -f talos/schematic.yaml \
+		  || { echo "    [FAIL] talos/schematic.yaml missing" >&2 ; exit 1 ; } ; \
+		exts=$$(yq -r ".customization.systemExtensions.officialExtensions[]" talos/schematic.yaml | sort) ; \
+		expected="siderolabs/iscsi-tools\nsiderolabs/qemu-guest-agent\nsiderolabs/util-linux-tools" ; \
+		[ "$$exts" = "$$(printf "%b" "$$expected")" ] \
+		  || { echo "    [FAIL] schematic extensions mismatch:" >&2 ; echo "$$exts" >&2 ; exit 1 ; } ; \
+		script=talos/scripts/build-image.sh ; \
+		test -x "$$script" \
+		  || { echo "    [FAIL] $$script not executable" >&2 ; exit 1 ; } ; \
+		grep -q "factory.talos.dev/schematics" "$$script" \
+		  || { echo "    [FAIL] script missing factory POST URL" >&2 ; exit 1 ; } ; \
+		grep -q "factory.talos.dev/image/" "$$script" \
+		  || { echo "    [FAIL] script missing factory image URL pattern" >&2 ; exit 1 ; } ; \
+		grep -q "PVEAPIToken=" "$$script" \
+		  || { echo "    [FAIL] script missing Proxmox auth header" >&2 ; exit 1 ; } ; \
+		grep -q "/storage/.*content?content=iso" "$$script" \
+		  || { echo "    [FAIL] script missing Proxmox ISO probe URL" >&2 ; exit 1 ; } ; \
+		grep -q "/storage/.*upload" "$$script" \
+		  || { echo "    [FAIL] script missing Proxmox upload URL" >&2 ; exit 1 ; } ; \
+		grep -qE "^talos-image:" Justfile \
+		  || { echo "    [FAIL] Justfile lacks talos-image recipe" >&2 ; exit 1 ; } ; \
+		tmp=$$(mktemp -d) ; \
+		trap "rm -rf $$tmp" EXIT ; \
+		cp -r talos "$$tmp/" ; \
+		cp Justfile "$$tmp/Justfile" ; \
+		cp .env.example "$$tmp/.env.example" ; \
+		if ( cd "$$tmp" && ./talos/scripts/build-image.sh </dev/null >/dev/null 2>&1 ) ; then \
+		  echo "    [FAIL] build-image.sh should fail when env unset" >&2 ; exit 1 ; \
+		fi ; \
+	'
+	@echo "    [PASS] talos.image-factory-schematic"

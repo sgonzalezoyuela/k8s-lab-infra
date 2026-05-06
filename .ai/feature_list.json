@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T14:19:07.078Z",
-    "version": 16,
+    "updatedAt": "2026-05-06T14:22:14.655Z",
+    "version": 17,
     "tddMode": "recommended"
   },
   "features": [
@@ -55,7 +55,7 @@
       "description": "Generate a Talos Image Factory schematic with qemu-guest-agent + iscsi-tools + util-linux-tools, download the matching ISO, and upload it to Proxmox ISO storage.",
       "module": "talos",
       "priority": 3,
-      "status": "failing",
+      "status": "implemented",
       "acceptance": [
         "`just talos-image` runs end-to-end and is idempotent.",
         "Schematic JSON includes exactly these system extensions: `siderolabs/qemu-guest-agent`, `siderolabs/iscsi-tools`, `siderolabs/util-linux-tools`.",
@@ -70,7 +70,7 @@
       "version": 1,
       "companionFile": "talos.image-factory-schematic.md",
       "createdAt": "2026-05-06T13:46:44.804Z",
-      "updatedAt": "2026-05-06T13:48:00.673Z"
+      "updatedAt": "2026-05-06T14:22:14.655Z"
     },
     {
       "id": "infra.opentofu.proxmox-vms",

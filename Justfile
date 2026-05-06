@@ -36,3 +36,7 @@ env-check:
       exit 1
     fi
     echo "env OK"
+
+# Build Talos Image Factory schematic, download ISO, upload to Proxmox.
+talos-image: env-check
+    ./talos/scripts/build-image.sh

@@ -52,3 +52,7 @@ infra-up: infra-render
 # Destroy the VMs (and any other infra-managed resources).
 infra-down:
     cd infra && tofu destroy -auto-approve -var-file=cluster.tfvars
+
+# Generate Talos machine configs (controlplane + worker) with per-node patches.
+talos-config: env-check
+    ./talos/scripts/gen-config.sh

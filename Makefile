@@ -10,6 +10,7 @@ test: test-bootstrap.nix-flake-tools
 test: test-bootstrap.config-scheme
 test: test-talos.image-factory-schematic
 test: test-infra.opentofu.proxmox-vms
+test: test-talos.machine-configs
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -253,3 +254,79 @@ test-infra.opentofu.proxmox-vms:
 		  || { echo "    [FAIL] missing output vm_ips" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] infra.opentofu.proxmox-vms"
+
+# ---------------------------------------------------------------------------
+# talos.machine-configs
+# ---------------------------------------------------------------------------
+# Verifies (executing the recipe in a tempdir; talosctl is in the devShell):
+#   - patch templates and gen-config.sh exist (criteria 2, 3)
+#   - Justfile has talos-config recipe
+#   - just talos-config produces controlplane.yaml, worker.yaml, secrets.yaml,
+#     cp.yaml, wk0.yaml, talosconfig, and rendered patches (criteria 1, 3)
+#   - patches contain the expected hostnames, addresses, gateway, DNS,
+#     install disk, and physical:true deviceSelector (criterion 2)
+#   - both final configs validate as `metal` (criterion 4)
+#   - talosconfig contains CP_IP and WK0_IP as endpoint/nodes (criterion 5)
+#   - rerunning after editing CP_IP regenerates patches but keeps the same
+#     secrets.yaml hash (criteria 1, 6)
+.PHONY: test-talos.machine-configs
+test-talos.machine-configs:
+	@echo "==> talos.machine-configs"
+	@nix develop --command bash -c '\
+		set -eu ; \
+		test -f talos/patches/cp.yaml.tpl  \
+		  || { echo "    [FAIL] cp.yaml.tpl missing"  >&2 ; exit 1 ; } ; \
+		test -f talos/patches/wk0.yaml.tpl \
+		  || { echo "    [FAIL] wk0.yaml.tpl missing" >&2 ; exit 1 ; } ; \
+		test -x talos/scripts/gen-config.sh \
+		  || { echo "    [FAIL] gen-config.sh missing or not executable" >&2 ; exit 1 ; } ; \
+		grep -qE "^talos-config:" Justfile \
+		  || { echo "    [FAIL] Justfile lacks talos-config recipe" >&2 ; exit 1 ; } ; \
+		tmp=$$(mktemp -d) ; \
+		trap "rm -rf $$tmp" EXIT ; \
+		cp -r talos "$$tmp/" ; \
+		cp Justfile "$$tmp/" ; \
+		cp .env.example "$$tmp/" ; \
+		cp .env.example "$$tmp/.env" ; \
+		sed -i "s|^PROXMOX_API_TOKEN_SECRET=.*|PROXMOX_API_TOKEN_SECRET=fake|" "$$tmp/.env" ; \
+		( cd "$$tmp" && just talos-config >/dev/null 2>&1 ) \
+		  || { echo "    [FAIL] just talos-config failed" >&2 ; exit 1 ; } ; \
+		for f in controlplane.yaml worker.yaml secrets.yaml cp.yaml wk0.yaml talosconfig patches/cp.yaml patches/wk0.yaml ; do \
+		  test -f "$$tmp/_out/$$f" \
+		    || { echo "    [FAIL] _out/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "hostname: cp.k8s4.lab.atricore.io" "$$tmp/_out/patches/cp.yaml" \
+		  || { echo "    [FAIL] cp patch missing hostname" >&2 ; exit 1 ; } ; \
+		grep -q "10.0.1.40/24" "$$tmp/_out/patches/cp.yaml" \
+		  || { echo "    [FAIL] cp patch missing IP/CIDR" >&2 ; exit 1 ; } ; \
+		grep -q "gateway: 10.0.0.1" "$$tmp/_out/patches/cp.yaml" \
+		  || { echo "    [FAIL] cp patch missing gateway" >&2 ; exit 1 ; } ; \
+		grep -q "10.0.1.77" "$$tmp/_out/patches/cp.yaml" \
+		  || { echo "    [FAIL] cp patch missing DNS" >&2 ; exit 1 ; } ; \
+		grep -q "disk: /dev/sda" "$$tmp/_out/patches/cp.yaml" \
+		  || { echo "    [FAIL] cp patch missing install disk" >&2 ; exit 1 ; } ; \
+		grep -q "physical: true" "$$tmp/_out/patches/cp.yaml" \
+		  || { echo "    [FAIL] cp patch missing deviceSelector physical:true" >&2 ; exit 1 ; } ; \
+		grep -q "hostname: wk0.k8s4.lab.atricore.io" "$$tmp/_out/patches/wk0.yaml" \
+		  || { echo "    [FAIL] wk0 patch missing hostname" >&2 ; exit 1 ; } ; \
+		grep -q "10.0.1.41/24" "$$tmp/_out/patches/wk0.yaml" \
+		  || { echo "    [FAIL] wk0 patch missing IP/CIDR" >&2 ; exit 1 ; } ; \
+		( cd "$$tmp" && talosctl validate --config _out/cp.yaml  --mode metal >/dev/null ) \
+		  || { echo "    [FAIL] cp.yaml does not validate as metal" >&2 ; exit 1 ; } ; \
+		( cd "$$tmp" && talosctl validate --config _out/wk0.yaml --mode metal >/dev/null ) \
+		  || { echo "    [FAIL] wk0.yaml does not validate as metal" >&2 ; exit 1 ; } ; \
+		grep -q "10.0.1.40" "$$tmp/_out/talosconfig" \
+		  || { echo "    [FAIL] talosconfig missing endpoint/node 10.0.1.40" >&2 ; exit 1 ; } ; \
+		grep -q "10.0.1.41" "$$tmp/_out/talosconfig" \
+		  || { echo "    [FAIL] talosconfig missing node 10.0.1.41" >&2 ; exit 1 ; } ; \
+		secrets_hash_before=$$(sha256sum "$$tmp/_out/secrets.yaml" | cut -d" " -f1) ; \
+		sed -i "s|^CP_IP=.*|CP_IP=10.0.1.45|" "$$tmp/.env" ; \
+		( cd "$$tmp" && just talos-config >/dev/null 2>&1 ) \
+		  || { echo "    [FAIL] just talos-config rerun failed" >&2 ; exit 1 ; } ; \
+		secrets_hash_after=$$(sha256sum "$$tmp/_out/secrets.yaml" | cut -d" " -f1) ; \
+		[ "$$secrets_hash_before" = "$$secrets_hash_after" ] \
+		  || { echo "    [FAIL] secrets.yaml regenerated on rerun (must be stable)" >&2 ; exit 1 ; } ; \
+		grep -q "10.0.1.45/24" "$$tmp/_out/patches/cp.yaml" \
+		  || { echo "    [FAIL] patch did not pick up new CP_IP" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] talos.machine-configs"

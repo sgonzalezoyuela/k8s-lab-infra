@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T14:26:50.495Z",
-    "version": 18,
+    "updatedAt": "2026-05-06T14:38:59.612Z",
+    "version": 19,
     "tddMode": "recommended"
   },
   "features": [
@@ -103,7 +103,7 @@
       "description": "Generate Talos controlplane and worker machine configs with per-node patches (hostname, static IP, gateway, DNS, install disk) under _out/.",
       "module": "talos",
       "priority": 5,
-      "status": "failing",
+      "status": "implemented",
       "acceptance": [
         "`just talos-config` runs `talosctl gen config ${CLUSTER_NAME} https://${CP_IP}:6443 --output-dir _out` once; reuses existing `_out/secrets.yaml` on subsequent runs (does not regenerate cluster PKI).",
         "Per-node patches written to `_out/patches/cp.yaml` and `_out/patches/wk0.yaml`, each setting: `machine.network.hostname`, `machine.network.interfaces[0]` (deviceSelector by physical:true), addresses (`<IP>/<NETWORK_CIDR>`), default route via `${NETWORK_GATEWAY}`, `machine.network.nameservers` = [`${NETWORK_DNS}`], `machine.install.disk` = `/dev/sda`.",
@@ -118,7 +118,7 @@
       "version": 1,
       "companionFile": "talos.machine-configs.md",
       "createdAt": "2026-05-06T13:47:11.953Z",
-      "updatedAt": "2026-05-06T13:48:01.960Z"
+      "updatedAt": "2026-05-06T14:38:59.612Z"
     },
     {
       "id": "talos.bootstrap-cluster",

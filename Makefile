@@ -12,6 +12,7 @@ test: test-talos.image-factory-schematic
 test: test-infra.opentofu.proxmox-vms
 test: test-talos.machine-configs
 test: test-talos.bootstrap-cluster
+test: test-talos.nocloud-proxmox-cloudinit
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -63,12 +64,13 @@ test-bootstrap.config-scheme:
 		set -eu ; \
 		required="PROXMOX_ENDPOINT PROXMOX_INSECURE PROXMOX_NODE \
 		          PROXMOX_API_TOKEN_ID PROXMOX_API_TOKEN_SECRET \
-		          PROXMOX_STORAGE_POOL PROXMOX_ISO_STORAGE \
+		          PROXMOX_STORAGE_POOL PROXMOX_ISO_STORAGE PROXMOX_SNIPPET_STORAGE \
 		          CLUSTER_NAME CLUSTER_DOMAIN \
 		          CP_HOSTNAME CP_IP WK0_HOSTNAME WK0_IP \
 		          NETWORK_CIDR NETWORK_GATEWAY NETWORK_DNS NETWORK_BRIDGE \
-		          VM_DISK_SIZE_GB VM_MEMORY_MB VM_CORES \
-		          TALOS_VERSION METALLB_RANGE CA_CERT_PATH CA_KEY_PATH" ; \
+		          CP_CORES CP_MEMORY_MB CP_DISK_SIZE_GB \
+		          WK_CORES WK_MEMORY_MB WK_DISK_SIZE_GB WK_STORAGE_DISK_SIZE_GB \
+		          TALOS_VERSION TALOS_IMAGE_PLATFORM METALLB_RANGE CA_CERT_PATH CA_KEY_PATH" ; \
 		test -f .env.example \
 		  || { echo "    [FAIL] .env.example missing" >&2 ; exit 1 ; } ; \
 		for k in $$required ; do \
@@ -130,8 +132,8 @@ test-bootstrap.config-scheme:
 # Verifies (without hitting the network):
 #   - schematic.yaml lists EXACTLY the three required system extensions (criterion 2)
 #   - build-image.sh exists, is executable, and references the factory URLs,
-#     Proxmox auth header, ISO probe URL, and upload URL (structural cover for
-#     criteria 1, 3, 4, 5)
+#     Proxmox auth header, ISO probe URL, the download-url endpoint, and the
+#     task status endpoint (structural cover for criteria 1, 3, 4, 5)
 #   - Justfile has the talos-image recipe
 #   - build-image.sh fails fast when env is unset (criterion 6)
 .PHONY: test-talos.image-factory-schematic
@@ -152,12 +154,16 @@ test-talos.image-factory-schematic:
 		  || { echo "    [FAIL] script missing factory POST URL" >&2 ; exit 1 ; } ; \
 		grep -q "factory.talos.dev/image/" "$$script" \
 		  || { echo "    [FAIL] script missing factory image URL pattern" >&2 ; exit 1 ; } ; \
+		grep -q "TALOS_IMAGE_PLATFORM" "$$script" && grep -q -- "-amd64.iso" "$$script" \
+		  || { echo "    [FAIL] script must request Talos NoCloud image variant" >&2 ; exit 1 ; } ; \
 		grep -q "PVEAPIToken=" "$$script" \
 		  || { echo "    [FAIL] script missing Proxmox auth header" >&2 ; exit 1 ; } ; \
 		grep -q "/storage/.*content?content=iso" "$$script" \
 		  || { echo "    [FAIL] script missing Proxmox ISO probe URL" >&2 ; exit 1 ; } ; \
-		grep -q "/storage/.*upload" "$$script" \
-		  || { echo "    [FAIL] script missing Proxmox upload URL" >&2 ; exit 1 ; } ; \
+		grep -q "/storage/.*download-url" "$$script" \
+		  || { echo "    [FAIL] script missing Proxmox download-url endpoint" >&2 ; exit 1 ; } ; \
+		grep -q "/tasks/.*/status" "$$script" \
+		  || { echo "    [FAIL] script missing Proxmox task status polling URL" >&2 ; exit 1 ; } ; \
 		grep -qE "^talos-image:" Justfile \
 		  || { echo "    [FAIL] Justfile lacks talos-image recipe" >&2 ; exit 1 ; } ; \
 		tmp=$$(mktemp -d) ; \
@@ -212,18 +218,34 @@ test-infra.opentofu.proxmox-vms:
 		  || { echo "    [FAIL] main.tf missing cp VM" >&2 ; exit 1 ; } ; \
 		grep -qE "^resource[[:space:]]+\"proxmox_virtual_environment_vm\"[[:space:]]+\"wk0\"" infra/main.tf \
 		  || { echo "    [FAIL] main.tf missing wk0 VM" >&2 ; exit 1 ; } ; \
-		grep -q "var.proxmox_storage_pool" infra/main.tf \
+		grep -q "var.proxmox_storage_pool"     infra/main.tf \
 		  || { echo "    [FAIL] disk not on var.proxmox_storage_pool" >&2 ; exit 1 ; } ; \
-		grep -q "var.vm_disk_size_gb"      infra/main.tf \
-		  || { echo "    [FAIL] disk not parameterized by vm_disk_size_gb" >&2 ; exit 1 ; } ; \
-		grep -q "var.vm_cores"             infra/main.tf \
-		  || { echo "    [FAIL] cores not parameterized" >&2 ; exit 1 ; } ; \
-		grep -q "var.vm_memory_mb"         infra/main.tf \
-		  || { echo "    [FAIL] memory not parameterized" >&2 ; exit 1 ; } ; \
-		grep -q "var.network_bridge"       infra/main.tf \
+		grep -q "var.proxmox_snippet_storage"  infra/main.tf \
+		  || { echo "    [FAIL] NoCloud snippets not on var.proxmox_snippet_storage" >&2 ; exit 1 ; } ; \
+		grep -q "var.cp_cores"                 infra/main.tf \
+		  || { echo "    [FAIL] CP cores not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.cp_memory_mb"             infra/main.tf \
+		  || { echo "    [FAIL] CP memory not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.cp_disk_size_gb"          infra/main.tf \
+		  || { echo "    [FAIL] CP OS disk not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.wk_cores"                 infra/main.tf \
+		  || { echo "    [FAIL] WK cores not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.wk_memory_mb"             infra/main.tf \
+		  || { echo "    [FAIL] WK memory not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.wk_disk_size_gb"          infra/main.tf \
+		  || { echo "    [FAIL] WK OS disk not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.wk_storage_disk_size_gb"  infra/main.tf \
+		  || { echo "    [FAIL] WK storage disk not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.network_bridge"           infra/main.tf \
 		  || { echo "    [FAIL] bridge not parameterized" >&2 ; exit 1 ; } ; \
-		grep -q "var.talos_iso_file_id"    infra/main.tf \
+		grep -q "var.talos_iso_file_id"        infra/main.tf \
 		  || { echo "    [FAIL] cdrom file_id not parameterized" >&2 ; exit 1 ; } ; \
+		disk_count=$$(grep -cE "^[[:space:]]*disk[[:space:]]*\\{" infra/main.tf) ; \
+		[ "$$disk_count" = "3" ] \
+		  || { echo "    [FAIL] expected 3 disk blocks total (cp:1 + wk0:2), found $$disk_count" >&2 ; exit 1 ; } ; \
+		scsi1_count=$$(grep -cE "interface[[:space:]]*=[[:space:]]*\"scsi1\"" infra/main.tf) ; \
+		[ "$$scsi1_count" = "1" ] \
+		  || { echo "    [FAIL] expected exactly 1 scsi1 interface (wk0 storage disk), found $$scsi1_count" >&2 ; exit 1 ; } ; \
 		tmp=$$(mktemp -d) ; \
 		trap "rm -rf $$tmp" EXIT ; \
 		mkdir -p "$$tmp/infra" "$$tmp/_out" "$$tmp/talos/scripts" ; \
@@ -239,12 +261,20 @@ test-infra.opentofu.proxmox-vms:
 		  || { echo "    [FAIL] just infra-render failed in fixture" >&2 ; exit 1 ; } ; \
 		test -f "$$tmp/infra/cluster.tfvars" \
 		  || { echo "    [FAIL] cluster.tfvars not produced" >&2 ; exit 1 ; } ; \
-		grep -q "proxmox_endpoint" "$$tmp/infra/cluster.tfvars" \
+		grep -q "proxmox_endpoint"          "$$tmp/infra/cluster.tfvars" \
 		  || { echo "    [FAIL] cluster.tfvars missing proxmox_endpoint" >&2 ; exit 1 ; } ; \
-		grep -q "talos_iso_file_id" "$$tmp/infra/cluster.tfvars" \
+		grep -q "talos_iso_file_id"         "$$tmp/infra/cluster.tfvars" \
 		  || { echo "    [FAIL] cluster.tfvars missing talos_iso_file_id" >&2 ; exit 1 ; } ; \
-		grep -q "deadbeef" "$$tmp/infra/cluster.tfvars" \
+		grep -q "proxmox_snippet_storage"   "$$tmp/infra/cluster.tfvars" \
+		  || { echo "    [FAIL] cluster.tfvars missing proxmox_snippet_storage" >&2 ; exit 1 ; } ; \
+		grep -q "network_gateway"          "$$tmp/infra/cluster.tfvars" \
+		  || { echo "    [FAIL] cluster.tfvars missing network_gateway" >&2 ; exit 1 ; } ; \
+		grep -q "deadbeef"                  "$$tmp/infra/cluster.tfvars" \
 		  || { echo "    [FAIL] schematic id not interpolated into iso file id" >&2 ; exit 1 ; } ; \
+		grep -q "^cp_cores"                 "$$tmp/infra/cluster.tfvars" \
+		  || { echo "    [FAIL] cluster.tfvars missing cp_cores" >&2 ; exit 1 ; } ; \
+		grep -q "^wk_storage_disk_size_gb"  "$$tmp/infra/cluster.tfvars" \
+		  || { echo "    [FAIL] cluster.tfvars missing wk_storage_disk_size_gb" >&2 ; exit 1 ; } ; \
 		for r in infra-render infra-up infra-down ; do \
 		  grep -qE "^$${r}:" Justfile \
 		    || { echo "    [FAIL] Justfile lacks $$r recipe" >&2 ; exit 1 ; } ; \
@@ -298,7 +328,7 @@ test-talos.machine-configs:
 		done ; \
 		grep -q "hostname: cp.k8s4.lab.atricore.io" "$$tmp/_out/patches/cp.yaml" \
 		  || { echo "    [FAIL] cp patch missing hostname" >&2 ; exit 1 ; } ; \
-		grep -q "10.0.1.40/24" "$$tmp/_out/patches/cp.yaml" \
+		grep -q "10.4.0.1/8" "$$tmp/_out/patches/cp.yaml" \
 		  || { echo "    [FAIL] cp patch missing IP/CIDR" >&2 ; exit 1 ; } ; \
 		grep -q "gateway: 10.0.0.1" "$$tmp/_out/patches/cp.yaml" \
 		  || { echo "    [FAIL] cp patch missing gateway" >&2 ; exit 1 ; } ; \
@@ -310,24 +340,24 @@ test-talos.machine-configs:
 		  || { echo "    [FAIL] cp patch missing deviceSelector physical:true" >&2 ; exit 1 ; } ; \
 		grep -q "hostname: wk0.k8s4.lab.atricore.io" "$$tmp/_out/patches/wk0.yaml" \
 		  || { echo "    [FAIL] wk0 patch missing hostname" >&2 ; exit 1 ; } ; \
-		grep -q "10.0.1.41/24" "$$tmp/_out/patches/wk0.yaml" \
+		grep -q "10.4.0.10/8" "$$tmp/_out/patches/wk0.yaml" \
 		  || { echo "    [FAIL] wk0 patch missing IP/CIDR" >&2 ; exit 1 ; } ; \
 		( cd "$$tmp" && talosctl validate --config _out/cp.yaml  --mode metal >/dev/null ) \
 		  || { echo "    [FAIL] cp.yaml does not validate as metal" >&2 ; exit 1 ; } ; \
 		( cd "$$tmp" && talosctl validate --config _out/wk0.yaml --mode metal >/dev/null ) \
 		  || { echo "    [FAIL] wk0.yaml does not validate as metal" >&2 ; exit 1 ; } ; \
-		grep -q "10.0.1.40" "$$tmp/_out/talosconfig" \
-		  || { echo "    [FAIL] talosconfig missing endpoint/node 10.0.1.40" >&2 ; exit 1 ; } ; \
-		grep -q "10.0.1.41" "$$tmp/_out/talosconfig" \
-		  || { echo "    [FAIL] talosconfig missing node 10.0.1.41" >&2 ; exit 1 ; } ; \
+		grep -q "10.4.0.1" "$$tmp/_out/talosconfig" \
+		  || { echo "    [FAIL] talosconfig missing endpoint/node 10.4.0.1" >&2 ; exit 1 ; } ; \
+		grep -q "10.4.0.10" "$$tmp/_out/talosconfig" \
+		  || { echo "    [FAIL] talosconfig missing node 10.4.0.10" >&2 ; exit 1 ; } ; \
 		secrets_hash_before=$$(sha256sum "$$tmp/_out/secrets.yaml" | cut -d" " -f1) ; \
-		sed -i "s|^CP_IP=.*|CP_IP=10.0.1.45|" "$$tmp/.env" ; \
+		sed -i "s|^CP_IP=.*|CP_IP=10.4.0.99|" "$$tmp/.env" ; \
 		( cd "$$tmp" && just talos-config >/dev/null 2>&1 ) \
 		  || { echo "    [FAIL] just talos-config rerun failed" >&2 ; exit 1 ; } ; \
 		secrets_hash_after=$$(sha256sum "$$tmp/_out/secrets.yaml" | cut -d" " -f1) ; \
 		[ "$$secrets_hash_before" = "$$secrets_hash_after" ] \
 		  || { echo "    [FAIL] secrets.yaml regenerated on rerun (must be stable)" >&2 ; exit 1 ; } ; \
-		grep -q "10.0.1.45/24" "$$tmp/_out/patches/cp.yaml" \
+		grep -q "10.4.0.99/8" "$$tmp/_out/patches/cp.yaml" \
 		  || { echo "    [FAIL] patch did not pick up new CP_IP" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] talos.machine-configs"
@@ -349,7 +379,7 @@ test-talos.machine-configs:
 #   - talos-apply applies BOTH cp and wk0 with --insecure (criterion 1)
 #   - kubeconfig recipe calls `talosctl kubeconfig` with --force (criterion 3)
 #   - cluster-up dependency chain has the required ordering: talos-image →
-#     infra-up → talos-config → talos-apply → talos-bootstrap → kubeconfig
+#     talos-config → infra-up → talos-bootstrap → kubeconfig
 #     (criterion 6)
 #
 # A best-effort smoke probe runs bootstrap-once.sh against an unreachable
@@ -389,10 +419,13 @@ test-talos.bootstrap-cluster:
 		grep -A4 "^kubeconfig:" Justfile | grep -q -- "--force" \
 		  || { echo "    [FAIL] kubeconfig recipe missing --force" >&2 ; exit 1 ; } ; \
 		deps=$$(grep -E "^cluster-up:" Justfile | sed -E "s/^cluster-up:[[:space:]]*//") ; \
-		for d in talos-image infra-up talos-config talos-apply talos-bootstrap kubeconfig ; do \
+		for d in talos-image talos-config infra-up talos-bootstrap kubeconfig ; do \
 		  echo "$$deps" | grep -q "$$d" \
 		    || { echo "    [FAIL] cluster-up missing $$d dep" >&2 ; exit 1 ; } ; \
 		done ; \
+		if echo "$$deps" | grep -q "talos-apply" ; then \
+		  echo "    [FAIL] cluster-up must not require talos-apply/DHCP maintenance discovery" >&2 ; exit 1 ; \
+		fi ; \
 		tmp=$$(mktemp -d) ; \
 		trap "rm -rf $$tmp" EXIT ; \
 		mkdir -p "$$tmp/_out" "$$tmp/talos/scripts" ; \
@@ -403,3 +436,60 @@ test-talos.bootstrap-cluster:
 		fi ; \
 	'
 	@echo "    [PASS] talos.bootstrap-cluster"
+
+# ---------------------------------------------------------------------------
+# talos.nocloud-proxmox-cloudinit
+# ---------------------------------------------------------------------------
+# Structural coverage for Talos NoCloud on Proxmox without live Proxmox/Talos:
+#   - Image Factory flow requests the nocloud platform image while preserving
+#     schematic extensions.
+#   - bpg/proxmox resources upload Talos machine configs as snippet user-data
+#     and wire them into VM initialization as NoCloud.
+#   - network data uses the configured static IP/CIDR, gateway, and DNS.
+#   - operator workflow targets configured static IPs and does not include the
+#     old talos-apply maintenance-mode step in cluster-up.
+#   - docs explain Talos NoCloud vs generic cloud-init and snippet storage.
+.PHONY: test-talos.nocloud-proxmox-cloudinit
+test-talos.nocloud-proxmox-cloudinit:
+	@echo "==> talos.nocloud-proxmox-cloudinit"
+	@nix develop --command bash -c '\
+		set -eu ; \
+		grep -qE "TALOS_IMAGE_PLATFORM=.*nocloud" talos/scripts/build-image.sh \
+		  || { echo "    [FAIL] build-image.sh missing nocloud platform default" >&2 ; exit 1 ; } ; \
+		grep -q "\$${TALOS_IMAGE_PLATFORM}-amd64.iso" talos/scripts/build-image.sh \
+		  || { echo "    [FAIL] build-image.sh image URL is not platform-based" >&2 ; exit 1 ; } ; \
+		grep -q "TALOS_IMAGE_PLATFORM=nocloud" .env.example \
+		  || { echo "    [FAIL] .env.example does not declare nocloud image platform" >&2 ; exit 1 ; } ; \
+		grep -qE "content_type[[:space:]]*=[[:space:]]*\"snippets\"" infra/main.tf \
+		  || { echo "    [FAIL] Proxmox snippet file resource missing" >&2 ; exit 1 ; } ; \
+		grep -qE "source_file[[:space:]]*\\{" infra/main.tf \
+		  || { echo "    [FAIL] Talos machine configs are not uploaded as files" >&2 ; exit 1 ; } ; \
+		grep -q "var.cp_talos_config_path" infra/main.tf \
+		  || { echo "    [FAIL] CP Talos config path not used as user-data source" >&2 ; exit 1 ; } ; \
+		grep -q "var.wk0_talos_config_path" infra/main.tf \
+		  || { echo "    [FAIL] WK0 Talos config path not used as user-data source" >&2 ; exit 1 ; } ; \
+		init_count=$$(grep -cE "^[[:space:]]*initialization[[:space:]]*\\{" infra/main.tf) ; \
+		[ "$$init_count" = "2" ] \
+		  || { echo "    [FAIL] expected two VM initialization blocks, found $$init_count" >&2 ; exit 1 ; } ; \
+		grep -qE "type[[:space:]]*=[[:space:]]*\"nocloud\"" infra/main.tf \
+		  || { echo "    [FAIL] VM initialization is not NoCloud" >&2 ; exit 1 ; } ; \
+		grep -q "user_data_file_id" infra/main.tf \
+		  || { echo "    [FAIL] VM initialization missing user_data_file_id" >&2 ; exit 1 ; } ; \
+		for expr in "var.cp_ip" "var.wk0_ip" "var.network_cidr" "gateway = var.network_gateway" "servers = [var.network_dns]" ; do \
+		  grep -Fq "$$expr" infra/main.tf \
+		    || { echo "    [FAIL] missing static network wiring: $$expr" >&2 ; exit 1 ; } ; \
+		done ; \
+		deps=$$(grep -E "^cluster-up:" Justfile | sed -E "s/^cluster-up:[[:space:]]*//") ; \
+		echo "$$deps" | grep -q "infra-up" \
+		  || { echo "    [FAIL] cluster-up missing infra-up" >&2 ; exit 1 ; } ; \
+		if echo "$$deps" | grep -q "talos-apply" ; then \
+		  echo "    [FAIL] cluster-up still depends on talos-apply" >&2 ; exit 1 ; \
+		fi ; \
+		grep -qi "does not run generic.*cloud-init" INIT-CLUSTER.md \
+		  || { echo "    [FAIL] docs missing generic cloud-init warning" >&2 ; exit 1 ; } ; \
+		grep -qi "NoCloud" INIT-CLUSTER.md \
+		  || { echo "    [FAIL] docs missing NoCloud guidance" >&2 ; exit 1 ; } ; \
+		grep -qi "snippets" INIT-CLUSTER.md \
+		  || { echo "    [FAIL] docs missing Proxmox snippets guidance" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] talos.nocloud-proxmox-cloudinit"

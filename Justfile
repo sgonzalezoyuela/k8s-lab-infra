@@ -45,8 +45,8 @@ talos-image: env-check
 infra-render: env-check
     ./talos/scripts/render-tfvars.sh
 
-# Apply OpenTofu — creates the CP and WK0 VMs on Proxmox.
-infra-up: infra-render
+# Apply OpenTofu — uploads Talos NoCloud user-data snippets and creates VMs.
+infra-up: talos-image talos-config infra-render
     cd infra && tofu init -upgrade && tofu apply -auto-approve -var-file=cluster.tfvars
 
 # Destroy the VMs (and any other infra-managed resources).
@@ -57,14 +57,15 @@ infra-down:
 talos-config: env-check
     ./talos/scripts/gen-config.sh
 
-# Apply Talos machine configs (insecure mode — VMs are in maintenance mode).
+# Fallback only: apply Talos machine configs manually if NoCloud first-boot
+# configuration was intentionally bypassed during troubleshooting.
 talos-apply: talos-config
     ./talos/scripts/wait-maintenance.sh
     talosctl apply-config --insecure -n $CP_IP  -f _out/cp.yaml
     talosctl apply-config --insecure -n $WK0_IP -f _out/wk0.yaml
 
 # Bootstrap etcd on the control plane (idempotent).
-talos-bootstrap: talos-apply
+talos-bootstrap: infra-up
     ./talos/scripts/wait-secure.sh
     ./talos/scripts/bootstrap-once.sh
 
@@ -72,8 +73,8 @@ talos-bootstrap: talos-apply
 kubeconfig: talos-bootstrap
     talosctl kubeconfig --talosconfig _out/talosconfig -n $CP_IP $KUBECONFIG --force
 
-# End-to-end: build the image, create VMs, configure Talos, bootstrap, and fetch kubeconfig.
-cluster-up: talos-image infra-up talos-config talos-apply talos-bootstrap kubeconfig
+# End-to-end: build the NoCloud image, generate configs, create VMs, bootstrap, and fetch kubeconfig.
+cluster-up: talos-image talos-config infra-up talos-bootstrap kubeconfig
     ./talos/scripts/wait-nodes-ready.sh
 
 # Tear down the cluster (destroys VMs + cleans local artifacts).

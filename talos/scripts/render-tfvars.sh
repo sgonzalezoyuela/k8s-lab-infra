@@ -33,6 +33,12 @@ if [ -z "${TALOS_VERSION:-}" ]; then
   exit 1
 fi
 
+TALOS_IMAGE_PLATFORM="${TALOS_IMAGE_PLATFORM:-nocloud}"
+if [ "$TALOS_IMAGE_PLATFORM" != "nocloud" ]; then
+  echo "ERROR: TALOS_IMAGE_PLATFORM must be 'nocloud' for Talos NoCloud datasource support." >&2
+  exit 1
+fi
+
 schematic_id="$(tr -d '[:space:]' < "$SCHEMATIC_ID_FILE")"
 if [ -z "$schematic_id" ]; then
   echo "ERROR: $SCHEMATIC_ID_FILE is empty." >&2
@@ -40,14 +46,16 @@ if [ -z "$schematic_id" ]; then
 fi
 id_short="${schematic_id:0:8}"
 
-export TALOS_ISO_BASENAME="talos-${TALOS_VERSION}-${id_short}.iso"
+export TALOS_ISO_BASENAME="talos-${TALOS_VERSION}-${id_short}-${TALOS_IMAGE_PLATFORM}.iso"
 
 # Explicit allowlist so envsubst never touches anything else.
 vars='$PROXMOX_ENDPOINT $PROXMOX_API_TOKEN_ID $PROXMOX_API_TOKEN_SECRET'
-vars="$vars "'$PROXMOX_INSECURE $PROXMOX_NODE $PROXMOX_STORAGE_POOL'
+vars="$vars "'$PROXMOX_INSECURE $PROXMOX_NODE $PROXMOX_STORAGE_POOL $PROXMOX_SNIPPET_STORAGE'
 vars="$vars "'$PROXMOX_ISO_STORAGE $TALOS_ISO_BASENAME $NETWORK_BRIDGE'
-vars="$vars "'$CLUSTER_NAME $VM_CORES $VM_MEMORY_MB $VM_DISK_SIZE_GB'
-vars="$vars "'$CP_HOSTNAME $CP_IP $WK0_HOSTNAME $WK0_IP'
+vars="$vars "'$CLUSTER_NAME'
+vars="$vars "'$CP_CORES $CP_MEMORY_MB $CP_DISK_SIZE_GB'
+vars="$vars "'$WK_CORES $WK_MEMORY_MB $WK_DISK_SIZE_GB $WK_STORAGE_DISK_SIZE_GB'
+vars="$vars "'$CP_HOSTNAME $CP_IP $WK0_HOSTNAME $WK0_IP $NETWORK_CIDR $NETWORK_GATEWAY $NETWORK_DNS'
 
 mkdir -p "$(dirname "$OUT")"
 envsubst "$vars" < "$TPL" > "$OUT"

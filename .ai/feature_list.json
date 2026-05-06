@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T14:43:19.025Z",
-    "version": 20,
+    "updatedAt": "2026-05-06T16:01:29.427Z",
+    "version": 27,
     "tddMode": "recommended"
   },
   "features": [
@@ -80,10 +80,11 @@
       "status": "implemented",
       "acceptance": [
         "`infra/` directory contains: `providers.tf`, `variables.tf`, `main.tf`, `outputs.tf`, `cluster.tfvars.example`, `cluster.tfvars.tpl`.",
-        "Provider is `bpg/proxmox` pinned to a known-good version (>= 0.66, < 1.0); `tofu init` succeeds.",
-        "`just infra-render` produces `infra/cluster.tfvars` from `.env` via envsubst, populating proxmox endpoint, token, node, storage pool, ISO file id, and per-VM specs.",
+        "Provider is `bpg/proxmox` pinned to a known-good version (>= 0.66, < 1.0); `tofu init` and `tofu validate` succeed.",
+        "`just infra-render` produces `infra/cluster.tfvars` from `.env` via envsubst, populating proxmox endpoint, token, node, storage pool, ISO file id, and per-role VM sizing (cp_cores/cp_memory_mb/cp_disk_size_gb, wk_cores/wk_memory_mb/wk_disk_size_gb/wk_storage_disk_size_gb).",
         "`just infra-up` runs `tofu apply -auto-approve -var-file=cluster.tfvars` and creates exactly two VMs on `${PROXMOX_NODE}`: cp-${CLUSTER_NAME} and wk0-${CLUSTER_NAME}.",
-        "Each VM has: configured cores (`VM_CORES`), memory (`VM_MEMORY_MB`), one disk on `${PROXMOX_STORAGE_POOL}` of size `VM_DISK_SIZE_GB` GiB, NIC on bridge `${NETWORK_BRIDGE}` with no VLAN tag, ISO mounted as cdrom from the file uploaded by `talos.image-factory-schematic`.",
+        "CP VM: `${CP_CORES}` cores, `${CP_MEMORY_MB}` MiB memory, ONE disk on `${PROXMOX_STORAGE_POOL}` of size `${CP_DISK_SIZE_GB}` GiB (scsi0/OS), NIC on bridge `${NETWORK_BRIDGE}` with no VLAN, ISO mounted as cdrom (ide3) from the schematic-built ISO.",
+        "WK0 VM: `${WK_CORES}` cores, `${WK_MEMORY_MB}` MiB memory, TWO disks on `${PROXMOX_STORAGE_POOL}` (scsi0 OS = `${WK_DISK_SIZE_GB}` GiB, scsi1 storage = `${WK_STORAGE_DISK_SIZE_GB}` GiB; the second disk is reserved for Longhorn and untouched by Talos), NIC on `${NETWORK_BRIDGE}` no VLAN, ISO mounted as cdrom (ide3).",
         "Each VM has boot order set so it boots from the cdrom (Talos ISO) on first boot, then from disk after install; VMs are powered on after apply.",
         "`just infra-down` runs `tofu destroy -auto-approve -var-file=cluster.tfvars` and removes both VMs cleanly.",
         "Re-running `just infra-up` against an existing apply is a no-op (`tofu plan` shows no changes).",
@@ -96,7 +97,7 @@
       "version": 1,
       "companionFile": "infra.opentofu.proxmox-vms.md",
       "createdAt": "2026-05-06T13:46:59.210Z",
-      "updatedAt": "2026-05-06T14:26:50.495Z"
+      "updatedAt": "2026-05-06T15:14:46.211Z"
     },
     {
       "id": "talos.machine-configs",
@@ -141,6 +142,31 @@
       "companionFile": "talos.bootstrap-cluster.md",
       "createdAt": "2026-05-06T13:47:23.181Z",
       "updatedAt": "2026-05-06T14:43:19.025Z"
+    },
+    {
+      "id": "talos.nocloud-proxmox-cloudinit",
+      "description": "Boot Talos with the NoCloud image and use Proxmox cloud-init/NoCloud data to provide Talos machine config and static network config at first boot, avoiding temporary DHCP IP discovery.",
+      "module": "talos",
+      "priority": 7,
+      "status": "implemented",
+      "acceptance": [
+        "Talos Image Factory build/request flow uses the NoCloud platform/image variant required by Talos NoCloud datasource support, while preserving required system extensions.",
+        "OpenTofu/Proxmox VM definitions attach or configure a Proxmox cloud-init/NoCloud datasource for each Talos VM instead of relying on normal guest cloud-init inside Talos.",
+        "Each node receives its Talos machine config as NoCloud `user-data` and static network settings for its configured IP, gateway, and DNS as NoCloud/Proxmox network data before first boot.",
+        "The workflow no longer requires discovering random DHCP maintenance IPs before applying Talos configs, and Talos apply/bootstrap commands target the configured static IPs after first boot.",
+        "Operator-facing docs explain that Talos does not run generic cloud-init, but does parse NoCloud when booted with the NoCloud Talos image, and document any Proxmox snippet/storage requirements.",
+        "Existing structural tests cover the NoCloud image selection, cloud-init datasource wiring, static IP config, and docs guidance without requiring live Proxmox or Talos access."
+      ],
+      "dependsOn": [
+        "talos.image-factory-schematic",
+        "talos.machine-configs",
+        "infra.opentofu.proxmox-vms"
+      ],
+      "notes": "User provided Talos v1.13 NoCloud docs. Correct design is not generic cloud-init in Talos, but Talos NoCloud datasource support. Proxmox cloud-init can provide NoCloud user-data/network-config when booting the NoCloud image. Proxmox docs path uses cicustom user=local:snippets/<node>.yml where snippet content is the Talos machine config; snippets may need placement/upload support.",
+      "version": 1,
+      "companionFile": "talos.nocloud-proxmox-cloudinit.md",
+      "createdAt": "2026-05-06T15:55:21.150Z",
+      "updatedAt": "2026-05-06T16:01:29.427Z"
     }
   ]
 }

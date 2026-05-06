@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a Talos Image Factory schematic, download the matching ISO, and upload
+# Build a Talos Image Factory schematic, download the matching NoCloud ISO, and upload
 # it to Proxmox ISO storage. Idempotent: same schematic -> same id, present
 # ISO locally -> skip download, present ISO on Proxmox -> skip upload.
 set -euo pipefail
@@ -35,6 +35,11 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 PROXMOX_INSECURE="${PROXMOX_INSECURE:-false}"
+TALOS_IMAGE_PLATFORM="${TALOS_IMAGE_PLATFORM:-nocloud}"
+if [ "$TALOS_IMAGE_PLATFORM" != "nocloud" ]; then
+  echo "ERROR: TALOS_IMAGE_PLATFORM must be 'nocloud' so Talos can parse Proxmox NoCloud data." >&2
+  exit 1
+fi
 CURL_INSECURE=()
 if [ "$PROXMOX_INSECURE" = "true" ]; then
   CURL_INSECURE+=(--insecure)
@@ -86,9 +91,9 @@ fi
 # 4. Download ISO if missing locally
 # ---------------------------------------------------------------------------
 id_short="${schematic_id:0:8}"
-iso_basename="talos-${TALOS_VERSION}-${id_short}.iso"
+iso_basename="talos-${TALOS_VERSION}-${id_short}-${TALOS_IMAGE_PLATFORM}.iso"
 iso_path="$OUT_DIR/$iso_basename"
-iso_url="https://factory.talos.dev/image/${schematic_id}/${TALOS_VERSION}/metal-amd64.iso"
+iso_url="https://factory.talos.dev/image/${schematic_id}/${TALOS_VERSION}/${TALOS_IMAGE_PLATFORM}-amd64.iso"
 
 if [ -f "$iso_path" ]; then
   echo "==> ISO already present locally at $iso_path"
@@ -104,10 +109,40 @@ fi
 auth_header="Authorization: PVEAPIToken=${PROXMOX_API_TOKEN_ID}=${PROXMOX_API_TOKEN_SECRET}"
 probe_url="${PROXMOX_ENDPOINT%/}/nodes/${PROXMOX_NODE}/storage/${PROXMOX_ISO_STORAGE}/content?content=iso"
 
+# Helper: run curl, echo the URL on failure and dump response body so the
+# operator sees Proxmox's actual error message instead of just "exit code 22".
+proxmox_curl() {
+  local label="$1"; shift
+  local body status
+  body="$(curl -sS -w $'\n__HTTP_STATUS__:%{http_code}' "${CURL_INSECURE[@]}" -H "$auth_header" "$@")" || {
+    echo "ERROR: curl failed for ${label}" >&2
+    echo "$body" >&2
+    return 1
+  }
+  status="${body##*__HTTP_STATUS__:}"
+  body="${body%$'\n__HTTP_STATUS__:'*}"
+  if [ "$status" -lt 200 ] || [ "$status" -ge 300 ]; then
+    echo "ERROR: ${label} returned HTTP $status" >&2
+    echo "       URL: $1" >&2
+    echo "       Response body:" >&2
+    printf '         %s\n' "$body" | head -10 >&2
+    if [ "$status" = "401" ]; then
+      echo "       Hint: 401 = Proxmox rejected the token. Check that PROXMOX_API_TOKEN_ID" >&2
+      echo "             and PROXMOX_API_TOKEN_SECRET in .env match an existing token in" >&2
+      echo "             Datacenter → Permissions → API Tokens. The secret is shown only once" >&2
+      echo "             at creation; regenerate it if you did not save it." >&2
+    elif [ "$status" = "403" ]; then
+      echo "       Hint: 403 = token authenticated but lacks privilege on this resource." >&2
+      echo "             For privsep tokens, grant ACLs explicitly; or set Privilege" >&2
+      echo "             Separation = false on the token to inherit from the user." >&2
+    fi
+    return 1
+  fi
+  printf '%s' "$body"
+}
+
 echo "==> probing Proxmox for existing ISO ($iso_basename)"
-probe_resp="$(curl -fsS "${CURL_INSECURE[@]}" \
-  -H "$auth_header" \
-  "$probe_url")"
+probe_resp="$(proxmox_curl "GET storage content" "$probe_url")"
 
 if printf '%s' "$probe_resp" \
     | jq -e --arg name "$iso_basename" \
@@ -118,16 +153,59 @@ if printf '%s' "$probe_resp" \
 fi
 
 # ---------------------------------------------------------------------------
-# 6. Upload via multipart POST
+# 6. Tell Proxmox to download the ISO from the Talos Image Factory directly.
+#
+# We use the `download-url` endpoint instead of the multipart `upload` endpoint.
+# Reasons:
+#   - The multipart upload of a ~320MB ISO often hits the API daemon's
+#     connection-close timeout, surfacing as `curl: (52) Empty reply from server`.
+#   - `download-url` is server-to-server (Proxmox host -> factory.talos.dev),
+#     usually faster than client-server upload and not subject to client-side
+#     network or timeout issues.
+#   - The Talos factory serves over HTTPS with a valid cert, so we can leave
+#     verify-certificates=1.
+# Reference: PUT /nodes/{node}/storage/{storage}/download-url
 # ---------------------------------------------------------------------------
-upload_url="${PROXMOX_ENDPOINT%/}/nodes/${PROXMOX_NODE}/storage/${PROXMOX_ISO_STORAGE}/upload"
-echo "==> uploading $iso_basename to Proxmox storage $PROXMOX_ISO_STORAGE on $PROXMOX_NODE"
-curl -fsS "${CURL_INSECURE[@]}" \
-  -H "$auth_header" \
-  -F "content=iso" \
-  -F "filename=$iso_basename" \
-  -F "file=@$iso_path" \
-  "$upload_url" \
-  >/dev/null
+download_url_endpoint="${PROXMOX_ENDPOINT%/}/nodes/${PROXMOX_NODE}/storage/${PROXMOX_ISO_STORAGE}/download-url"
 
-echo "    upload complete"
+echo "==> asking Proxmox to download $iso_basename from $iso_url"
+upid_resp="$(proxmox_curl "POST download-url" \
+  -X POST \
+  --data-urlencode "url=${iso_url}" \
+  --data-urlencode "content=iso" \
+  --data-urlencode "filename=${iso_basename}" \
+  --data-urlencode "verify-certificates=1" \
+  "$download_url_endpoint")"
+
+upid="$(printf '%s' "$upid_resp" | jq -r .data)"
+if [ -z "$upid" ] || [ "$upid" = "null" ]; then
+  echo "ERROR: download-url did not return a task UPID; response: $upid_resp" >&2
+  exit 1
+fi
+echo "    Proxmox download task: $upid"
+
+# Poll task status until stopped, with a hard timeout.
+status_url="${PROXMOX_ENDPOINT%/}/nodes/${PROXMOX_NODE}/tasks/${upid}/status"
+deadline=$(( $(date +%s) + 600 ))   # 10 minutes
+while :; do
+  if [ "$(date +%s)" -gt "$deadline" ]; then
+    echo "ERROR: timed out waiting for Proxmox download task $upid" >&2
+    exit 1
+  fi
+  status_resp="$(proxmox_curl "GET task status" "$status_url")"
+  status="$(printf '%s' "$status_resp" | jq -r .data.status)"
+  if [ "$status" = "stopped" ]; then
+    exit_status="$(printf '%s' "$status_resp" | jq -r .data.exitstatus)"
+    if [ "$exit_status" = "OK" ]; then
+      echo "    download complete"
+      break
+    else
+      echo "ERROR: Proxmox download task ended with status: $exit_status" >&2
+      log_url="${PROXMOX_ENDPOINT%/}/nodes/${PROXMOX_NODE}/tasks/${upid}/log"
+      log_resp="$(proxmox_curl "GET task log" "$log_url" || true)"
+      printf '%s' "$log_resp" | jq -r '.data[]?.t' 2>/dev/null | tail -20 >&2 || true
+      exit 1
+    fi
+  fi
+  sleep 3
+done

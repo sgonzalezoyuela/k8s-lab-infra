@@ -36,8 +36,13 @@ variable "proxmox_storage_pool" {
   type        = string
 }
 
+variable "proxmox_snippet_storage" {
+  description = "Datastore that supports Proxmox snippets content for NoCloud user-data."
+  type        = string
+}
+
 variable "talos_iso_file_id" {
-  description = "Proxmox file id for the Talos ISO, e.g. 'local:iso/talos-v1.8.2-abcd1234.iso'."
+  description = "Proxmox file id for the Talos ISO, e.g. 'local:iso/talos-v1.13.0-abcd1234.iso'."
   type        = string
 }
 
@@ -46,30 +51,87 @@ variable "network_bridge" {
   type        = string
 }
 
+variable "network_cidr" {
+  description = "IPv4 prefix length for node static addresses."
+  type        = number
+}
+
+variable "network_gateway" {
+  description = "Default IPv4 gateway for Talos nodes."
+  type        = string
+}
+
+variable "network_dns" {
+  description = "DNS server for Talos nodes."
+  type        = string
+}
+
+variable "cp_talos_config_path" {
+  description = "Path to the rendered control-plane Talos machine config used as NoCloud user-data."
+  type        = string
+  default     = "../_out/cp.yaml"
+}
+
+variable "wk0_talos_config_path" {
+  description = "Path to the rendered worker Talos machine config used as NoCloud user-data."
+  type        = string
+  default     = "../_out/wk0.yaml"
+}
+
 # ---------------------------------------------------------------------------
-# Cluster identity / VM sizing
+# Cluster identity
 # ---------------------------------------------------------------------------
 variable "cluster_name" {
   description = "Cluster name, used to compose VM names (cp-<name>, wk0-<name>)."
   type        = string
 }
 
-variable "vm_cores" {
-  description = "vCPU cores per VM."
+# ---------------------------------------------------------------------------
+# Control-plane VM sizing
+# ---------------------------------------------------------------------------
+variable "cp_cores" {
+  description = "vCPU cores per control-plane VM."
   type        = number
-  default     = 2
+  default     = 4
 }
 
-variable "vm_memory_mb" {
-  description = "Memory per VM in megabytes."
+variable "cp_memory_mb" {
+  description = "Memory per control-plane VM in megabytes."
   type        = number
   default     = 4096
 }
 
-variable "vm_disk_size_gb" {
-  description = "Disk size per VM in gigabytes."
+variable "cp_disk_size_gb" {
+  description = "OS disk size per control-plane VM in gigabytes."
   type        = number
-  default     = 64
+  default     = 30
+}
+
+# ---------------------------------------------------------------------------
+# Worker VM sizing
+# ---------------------------------------------------------------------------
+variable "wk_cores" {
+  description = "vCPU cores per worker VM."
+  type        = number
+  default     = 8
+}
+
+variable "wk_memory_mb" {
+  description = "Memory per worker VM in megabytes."
+  type        = number
+  default     = 8192
+}
+
+variable "wk_disk_size_gb" {
+  description = "OS disk size per worker VM in gigabytes."
+  type        = number
+  default     = 30
+}
+
+variable "wk_storage_disk_size_gb" {
+  description = "Second disk size per worker VM in gigabytes (consumed by Longhorn)."
+  type        = number
+  default     = 200
 }
 
 # ---------------------------------------------------------------------------

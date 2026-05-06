@@ -55,6 +55,7 @@ mkdir -p _out _out/patches
 if [ ! -f _out/secrets.yaml ]; then
   echo "==> generating cluster secrets (one-time): _out/secrets.yaml"
   talosctl gen secrets -o _out/secrets.yaml
+  chmod 600 _out/secrets.yaml
 else
   echo "==> reusing existing _out/secrets.yaml"
 fi
@@ -69,6 +70,7 @@ talosctl gen config "${CLUSTER_NAME}" "https://${CP_IP}:6443" \
   --output-dir _out \
   --with-secrets _out/secrets.yaml \
   --force
+chmod 600 _out/talosconfig
 
 # ---------------------------------------------------------------------------
 # 6. Render per-node patches (explicit envsubst allowlist).

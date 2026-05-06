@@ -70,7 +70,7 @@
           echo "NOTE: use k alias to run kubecolor.  Autocomplete is also enabled."
           echo
           echo "*** Remember to add an IP route for the loadbalancer assigned ips via the cluster node ip"
-          echo -e "\e[1;32msudo ip route add 10.200.0.0/24 via 10.0.1.40\e[0m"
+          echo -e "\e[1;32msudo ip route add 10.4.200.0/24 via 10.4.0.1\e[0m"
 
           # Set up zsh with kubectl completion
           export ZDOTDIR=$(mktemp -d)

@@ -14,3 +14,4 @@
 2026-05-06T14:16:23.795Z [IMPLEMENTED] <bootstrap.nix-flake-tools> Implemented feature bootstrap.nix-flake-tools (awaiting review)
 2026-05-06T14:19:07.078Z [IMPLEMENTED] <bootstrap.config-scheme> Implemented feature bootstrap.config-scheme (awaiting review)
 2026-05-06T14:22:14.655Z [IMPLEMENTED] <talos.image-factory-schematic> Implemented feature talos.image-factory-schematic (awaiting review)
+2026-05-06T14:26:50.495Z [IMPLEMENTED] <infra.opentofu.proxmox-vms> Implemented feature infra.opentofu.proxmox-vms (awaiting review)

@@ -1,0 +1,16 @@
+proxmox_endpoint         = "${PROXMOX_ENDPOINT}"
+proxmox_api_token_id     = "${PROXMOX_API_TOKEN_ID}"
+proxmox_api_token_secret = "${PROXMOX_API_TOKEN_SECRET}"
+proxmox_insecure         = ${PROXMOX_INSECURE}
+proxmox_node             = "${PROXMOX_NODE}"
+proxmox_storage_pool     = "${PROXMOX_STORAGE_POOL}"
+talos_iso_file_id        = "${PROXMOX_ISO_STORAGE}:iso/${TALOS_ISO_BASENAME}"
+network_bridge           = "${NETWORK_BRIDGE}"
+cluster_name             = "${CLUSTER_NAME}"
+vm_cores                 = ${VM_CORES}
+vm_memory_mb             = ${VM_MEMORY_MB}
+vm_disk_size_gb          = ${VM_DISK_SIZE_GB}
+cp_hostname              = "${CP_HOSTNAME}"
+cp_ip                    = "${CP_IP}"
+wk0_hostname             = "${WK0_HOSTNAME}"
+wk0_ip                   = "${WK0_IP}"

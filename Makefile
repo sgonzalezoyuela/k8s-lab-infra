@@ -9,6 +9,7 @@
 test: test-bootstrap.nix-flake-tools
 test: test-bootstrap.config-scheme
 test: test-talos.image-factory-schematic
+test: test-infra.opentofu.proxmox-vms
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -167,3 +168,88 @@ test-talos.image-factory-schematic:
 		fi ; \
 	'
 	@echo "    [PASS] talos.image-factory-schematic"
+
+# ---------------------------------------------------------------------------
+# infra.opentofu.proxmox-vms
+# ---------------------------------------------------------------------------
+# Verifies:
+#   - all required files in infra/ exist (criterion 1)
+#   - provider is bpg/proxmox pinned ~> 0.66 (criterion 2)
+#   - tofu init -backend=false + tofu validate succeed (criterion 2)
+#   - main.tf declares both VMs and parameterizes the right vars
+#     (criteria 4, 5)
+#   - infra-render fixture produces a populated cluster.tfvars with the
+#     schematic id interpolated into the ISO file id (criterion 3)
+#   - Justfile has infra-render / infra-up / infra-down recipes (criteria
+#     3, 4, 7)
+#   - outputs.tf exposes vm_ids and vm_ips (criterion 9)
+#
+# Boot order (criterion 6) is covered structurally: bpg/proxmox v0.66's
+# `boot_order` is a list of device interface names; cdrom-first is encoded
+# as ["ide3", "scsi0"] in main.tf, where ide3 is the cdrom interface and
+# scsi0 is the disk. We don't grep for the exact list to keep the test
+# resilient to formatting; `tofu validate` covers schema correctness.
+.PHONY: test-infra.opentofu.proxmox-vms
+test-infra.opentofu.proxmox-vms:
+	@echo "==> infra.opentofu.proxmox-vms"
+	@nix develop --command bash -c '\
+		set -eu ; \
+		for f in providers.tf variables.tf main.tf outputs.tf cluster.tfvars.example cluster.tfvars.tpl ; do \
+		  test -f "infra/$$f" \
+		    || { echo "    [FAIL] infra/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "bpg/proxmox" infra/providers.tf \
+		  || { echo "    [FAIL] provider source not bpg/proxmox" >&2 ; exit 1 ; } ; \
+		grep -qE "version[[:space:]]*=[[:space:]]*\"~>[[:space:]]*0\.66\"" infra/providers.tf \
+		  || { echo "    [FAIL] provider version not pinned ~> 0.66" >&2 ; exit 1 ; } ; \
+		( cd infra && tofu init -backend=false -input=false -no-color >/dev/null ) \
+		  || { echo "    [FAIL] tofu init failed" >&2 ; exit 1 ; } ; \
+		( cd infra && tofu validate -no-color >/dev/null ) \
+		  || { echo "    [FAIL] tofu validate failed" >&2 ; exit 1 ; } ; \
+		grep -qE "^resource[[:space:]]+\"proxmox_virtual_environment_vm\"[[:space:]]+\"cp\"" infra/main.tf \
+		  || { echo "    [FAIL] main.tf missing cp VM" >&2 ; exit 1 ; } ; \
+		grep -qE "^resource[[:space:]]+\"proxmox_virtual_environment_vm\"[[:space:]]+\"wk0\"" infra/main.tf \
+		  || { echo "    [FAIL] main.tf missing wk0 VM" >&2 ; exit 1 ; } ; \
+		grep -q "var.proxmox_storage_pool" infra/main.tf \
+		  || { echo "    [FAIL] disk not on var.proxmox_storage_pool" >&2 ; exit 1 ; } ; \
+		grep -q "var.vm_disk_size_gb"      infra/main.tf \
+		  || { echo "    [FAIL] disk not parameterized by vm_disk_size_gb" >&2 ; exit 1 ; } ; \
+		grep -q "var.vm_cores"             infra/main.tf \
+		  || { echo "    [FAIL] cores not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.vm_memory_mb"         infra/main.tf \
+		  || { echo "    [FAIL] memory not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.network_bridge"       infra/main.tf \
+		  || { echo "    [FAIL] bridge not parameterized" >&2 ; exit 1 ; } ; \
+		grep -q "var.talos_iso_file_id"    infra/main.tf \
+		  || { echo "    [FAIL] cdrom file_id not parameterized" >&2 ; exit 1 ; } ; \
+		tmp=$$(mktemp -d) ; \
+		trap "rm -rf $$tmp" EXIT ; \
+		mkdir -p "$$tmp/infra" "$$tmp/_out" "$$tmp/talos/scripts" ; \
+		cp infra/cluster.tfvars.tpl "$$tmp/infra/" ; \
+		cp Justfile "$$tmp/Justfile" ; \
+		cp .env.example "$$tmp/.env.example" ; \
+		cp .env.example "$$tmp/.env" ; \
+		sed -i "s|^PROXMOX_API_TOKEN_SECRET=.*|PROXMOX_API_TOKEN_SECRET=fake|" "$$tmp/.env" ; \
+		echo "deadbeefcafef00d1234" > "$$tmp/_out/talos-schematic-id" ; \
+		cp talos/scripts/render-tfvars.sh "$$tmp/talos/scripts/" ; \
+		chmod +x "$$tmp/talos/scripts/render-tfvars.sh" ; \
+		( cd "$$tmp" && just infra-render >/dev/null 2>&1 ) \
+		  || { echo "    [FAIL] just infra-render failed in fixture" >&2 ; exit 1 ; } ; \
+		test -f "$$tmp/infra/cluster.tfvars" \
+		  || { echo "    [FAIL] cluster.tfvars not produced" >&2 ; exit 1 ; } ; \
+		grep -q "proxmox_endpoint" "$$tmp/infra/cluster.tfvars" \
+		  || { echo "    [FAIL] cluster.tfvars missing proxmox_endpoint" >&2 ; exit 1 ; } ; \
+		grep -q "talos_iso_file_id" "$$tmp/infra/cluster.tfvars" \
+		  || { echo "    [FAIL] cluster.tfvars missing talos_iso_file_id" >&2 ; exit 1 ; } ; \
+		grep -q "deadbeef" "$$tmp/infra/cluster.tfvars" \
+		  || { echo "    [FAIL] schematic id not interpolated into iso file id" >&2 ; exit 1 ; } ; \
+		for r in infra-render infra-up infra-down ; do \
+		  grep -qE "^$${r}:" Justfile \
+		    || { echo "    [FAIL] Justfile lacks $$r recipe" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -qE "^output[[:space:]]+\"vm_ids\"" infra/outputs.tf \
+		  || { echo "    [FAIL] missing output vm_ids" >&2 ; exit 1 ; } ; \
+		grep -qE "^output[[:space:]]+\"vm_ips\"" infra/outputs.tf \
+		  || { echo "    [FAIL] missing output vm_ips" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] infra.opentofu.proxmox-vms"

@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T14:22:14.655Z",
-    "version": 17,
+    "updatedAt": "2026-05-06T14:26:50.495Z",
+    "version": 18,
     "tddMode": "recommended"
   },
   "features": [
@@ -77,7 +77,7 @@
       "description": "OpenTofu module provisioning CP + WK0 VMs on Proxmox via bpg/proxmox provider, parameterized by .env-derived tfvars.",
       "module": "infra",
       "priority": 4,
-      "status": "failing",
+      "status": "implemented",
       "acceptance": [
         "`infra/` directory contains: `providers.tf`, `variables.tf`, `main.tf`, `outputs.tf`, `cluster.tfvars.example`, `cluster.tfvars.tpl`.",
         "Provider is `bpg/proxmox` pinned to a known-good version (>= 0.66, < 1.0); `tofu init` succeeds.",
@@ -96,7 +96,7 @@
       "version": 1,
       "companionFile": "infra.opentofu.proxmox-vms.md",
       "createdAt": "2026-05-06T13:46:59.210Z",
-      "updatedAt": "2026-05-06T13:48:01.719Z"
+      "updatedAt": "2026-05-06T14:26:50.495Z"
     },
     {
       "id": "talos.machine-configs",

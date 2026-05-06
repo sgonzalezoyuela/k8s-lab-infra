@@ -40,3 +40,15 @@ env-check:
 # Build Talos Image Factory schematic, download ISO, upload to Proxmox.
 talos-image: env-check
     ./talos/scripts/build-image.sh
+
+# Render infra/cluster.tfvars from .env + _out/talos-schematic-id.
+infra-render: env-check
+    ./talos/scripts/render-tfvars.sh
+
+# Apply OpenTofu — creates the CP and WK0 VMs on Proxmox.
+infra-up: infra-render
+    cd infra && tofu init -upgrade && tofu apply -auto-approve -var-file=cluster.tfvars
+
+# Destroy the VMs (and any other infra-managed resources).
+infra-down:
+    cd infra && tofu destroy -auto-approve -var-file=cluster.tfvars

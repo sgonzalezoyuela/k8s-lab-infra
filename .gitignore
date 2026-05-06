@@ -3,11 +3,11 @@ kubeconfig
 talosconfig
 tmp
 
-# config + secrets
+# config + secrets (apply at any depth so per-cluster dirs are covered)
 .env
-secrets/*
-!secrets/.gitkeep
-!secrets/README.md
+**/secrets/*
+!**/secrets/.gitkeep
+!**/secrets/README.md
 
 # generated artifacts
 _out/

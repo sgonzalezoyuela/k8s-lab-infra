@@ -128,8 +128,8 @@ test-bootstrap.config-scheme:
 		  || { echo "    [FAIL] $(CLUSTER_DIR)/secrets/.gitkeep missing" >&2 ; exit 1 ; } ; \
 		test -f "$(CLUSTER_DIR)/secrets/README.md" \
 		  || { echo "    [FAIL] $(CLUSTER_DIR)/secrets/README.md missing" >&2 ; exit 1 ; } ; \
-		for p in "^\.env\$$" "^secrets/\*\$$" "^!secrets/\.gitkeep\$$" \
-		         "^!secrets/README\.md\$$" "^_out/\$$" "^\.terraform/\$$" \
+		for p in "^\.env\$$" "^\*\*/secrets/\*\$$" "^!\*\*/secrets/\.gitkeep\$$" \
+		         "^!\*\*/secrets/README\.md\$$" "^_out/\$$" "^\.terraform/\$$" \
 		         "^\.terraform\.lock\.hcl\$$" "^\*\.tfstate\$$" \
 		         "^\*\.tfstate\.\*\$$" "^\*\.tfvars\$$" \
 		         "^!\*\.tfvars\.example\$$" ; do \

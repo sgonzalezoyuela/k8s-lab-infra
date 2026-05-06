@@ -1,0 +1,13 @@
+2026-05-06T13:45:51.535Z [INIT] Initialized a3c-lab-4 with 1 features
+2026-05-06T13:46:13.191Z [DELETE] <core.setup> Deleted feature core.setup
+2026-05-06T13:46:21.527Z [CREATE] <bootstrap.nix-flake-tools> Created feature bootstrap.nix-flake-tools
+2026-05-06T13:46:35.169Z [CREATE] <bootstrap.config-scheme> Created feature bootstrap.config-scheme
+2026-05-06T13:46:44.805Z [CREATE] <talos.image-factory-schematic> Created feature talos.image-factory-schematic
+2026-05-06T13:46:59.211Z [CREATE] <infra.opentofu.proxmox-vms> Created feature infra.opentofu.proxmox-vms
+2026-05-06T13:47:11.953Z [CREATE] <talos.machine-configs> Created feature talos.machine-configs
+2026-05-06T13:47:23.181Z [CREATE] <talos.bootstrap-cluster> Created feature talos.bootstrap-cluster
+2026-05-06T13:48:00.286Z [UPDATE] <bootstrap.config-scheme> Updated feature bootstrap.config-scheme | fields=companionFile
+2026-05-06T13:48:00.673Z [UPDATE] <talos.image-factory-schematic> Updated feature talos.image-factory-schematic | fields=companionFile
+2026-05-06T13:48:01.720Z [UPDATE] <infra.opentofu.proxmox-vms> Updated feature infra.opentofu.proxmox-vms | fields=companionFile
+2026-05-06T13:48:01.961Z [UPDATE] <talos.machine-configs> Updated feature talos.machine-configs | fields=companionFile
+2026-05-06T13:48:02.301Z [UPDATE] <talos.bootstrap-cluster> Updated feature talos.bootstrap-cluster | fields=companionFile

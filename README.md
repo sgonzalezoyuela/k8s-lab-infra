@@ -28,6 +28,11 @@ just infra-up                # tofu apply, creates VMs against this cluster's st
 just talos-bootstrap
 just kubeconfig
 kubectl get nodes
+
+# Phase 2 (opt-in): install cert-manager with the atricore-ca ClusterIssuer.
+# This is NOT part of `just cluster-up`. Requires secrets/ca.crt + secrets/ca.key.
+just cert-manager-install
+just cert-manager-smoke
 ```
 
 The cluster's `nix develop` shell exports:

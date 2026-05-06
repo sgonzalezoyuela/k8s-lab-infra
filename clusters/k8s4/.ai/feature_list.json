@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T19:01:09.624Z",
-    "version": 29,
+    "updatedAt": "2026-05-06T22:45:37.204Z",
+    "version": 31,
     "tddMode": "recommended"
   },
   "features": [
@@ -200,6 +200,36 @@
       "companionFile": "bootstrap.split-tools-and-clusters.md",
       "createdAt": "2026-05-06T18:36:12.359Z",
       "updatedAt": "2026-05-06T19:01:09.624Z"
+    },
+    {
+      "id": "cluster.cert-manager-atricore-ca",
+      "description": "Install cert-manager via Helm and configure a CA-backed ClusterIssuer named after CLUSTER_ISSUER_NAME (default atricore-ca), using the operator-supplied CA materials in clusters/<name>/secrets/.",
+      "module": "cluster",
+      "priority": 9,
+      "status": "implemented",
+      "acceptance": [
+        "`tools/cluster/cert-manager/{install.sh,uninstall.sh,smoke.sh,helm-values.yaml,cluster-issuer.yaml.tpl,chart-version.txt}` all exist; the `*.sh` files are executable and start with the `${TOOLS_DIR:?...}` preamble.",
+        "`tools/.env.example` declares `CLUSTER_ISSUER_NAME=atricore-ca` and `CERT_MANAGER_CHART_VERSION=<pinned>` (matching `chart-version.txt`). The bootstrap.config-scheme test target's required-vars list is extended with both keys.",
+        "`tools/Justfile` exposes three `[no-cd]` recipes: `cert-manager-install`, `cert-manager-smoke`, `cert-manager-uninstall`. Install and smoke depend on `env-check`.",
+        "`install.sh` pre-validates that `${CA_CERT_PATH}` and `${CA_KEY_PATH}` exist and that their public keys (modulus or pubkey hash) match; warns when the cert's notAfter is less than 60 days away; helm-installs the pinned chart in namespace `cert-manager` with `--create-namespace`; applies the TLS Secret named `${CLUSTER_ISSUER_NAME}` server-side; applies the rendered ClusterIssuer; then runs `cmctl check api --wait=2m`.",
+        "`cluster-issuer.yaml.tpl` declares `kind: ClusterIssuer`, `metadata.name: ${CLUSTER_ISSUER_NAME}`, and `spec.ca.secretName: ${CLUSTER_ISSUER_NAME}` so envsubst produces a valid manifest at install time.",
+        "Re-running `just cert-manager-install` against an already-installed cluster is a no-op: `helm upgrade --install` keeps the release at the same revision/chart version, and `kubectl apply --server-side` reports unchanged for both Secret and ClusterIssuer.",
+        "`just cert-manager-uninstall` removes the ClusterIssuer, the Secret, the Helm release, and the `cert-manager` namespace, and is safe to run when nothing is installed (no errors on missing resources).",
+        "`tools/docs/INIT-CLUSTER.md` Phase 2 section names the issuer `atricore-ca` (replacing any prior `own-ca` reference) and documents the three recipes plus the prerequisites (working cluster, kubeconfig, ca.crt + ca.key in cluster's secrets/).",
+        "`tools/Makefile` has a new `test-cluster.cert-manager` target wired into the top-level `test` target. It validates offline: file presence and shebangs/preambles; install.sh references helm/kubectl/envsubst/cmctl with the right patterns and includes the openssl pre-validate and 60-day expiry warning; cluster-issuer.yaml.tpl has the required placeholder and shape; chart-version.txt matches `^v[0-9]+\\.[0-9]+\\.[0-9]+$`; the new env vars are in `.env.example`; the new Justfile recipes are present.",
+        "`clusters/k8s4/.env` is updated with `CLUSTER_ISSUER_NAME=atricore-ca` and `CERT_MANAGER_CHART_VERSION=<same default>` so `just env-check` continues to pass for the k8s4 cluster.",
+        "`README.md` (top-level) references `just cert-manager-install` as the Phase 2 step for adding cert-manager to a cluster; clarifies it is NOT part of `cluster-up`.",
+        "All existing structural tests still pass when run as `npm test` from `clusters/k8s4/` (which runs the tools structural tests + the cluster smoke). The new `test-cluster.cert-manager` is part of that run."
+      ],
+      "dependsOn": [
+        "talos.bootstrap-cluster",
+        "bootstrap.split-tools-and-clusters"
+      ],
+      "notes": "User-supplied CA at clusters/k8s4/secrets/{ca.crt,ca.key}. CN: atricore-ca. Cert valid until 2026-07-03. Plan-mode tradeoffs were locked in: parameterized issuer name (default atricore-ca), per-cluster cert-manager version pin, no chain-verification in smoke, openssl pre-validation + 60-day expiry warning. cluster-up stays Phase-1; cert-manager is opt-in.",
+      "version": 1,
+      "companionFile": "cluster.cert-manager-atricore-ca.md",
+      "createdAt": "2026-05-06T22:35:57.099Z",
+      "updatedAt": "2026-05-06T22:45:37.204Z"
     }
   ]
 }

@@ -109,3 +109,18 @@ cluster-down: infra-down
 [no-cd]
 new-cluster name:
     "$TOOLS_DIR/scripts/new-cluster.sh" "{{name}}"
+
+# Phase 2: install cert-manager + the atricore-ca ClusterIssuer (idempotent).
+[no-cd]
+cert-manager-install: env-check
+    "$TOOLS_DIR/cluster/cert-manager/install.sh"
+
+# Phase 2: issue a throwaway Certificate against the ClusterIssuer to verify the install.
+[no-cd]
+cert-manager-smoke: env-check
+    "$TOOLS_DIR/cluster/cert-manager/smoke.sh"
+
+# Phase 2: remove the ClusterIssuer, the CA Secret, the Helm release, and the namespace.
+[no-cd]
+cert-manager-uninstall:
+    "$TOOLS_DIR/cluster/cert-manager/uninstall.sh"

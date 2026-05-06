@@ -41,6 +41,7 @@ test: test-infra.opentofu.proxmox-vms
 test: test-talos.machine-configs
 test: test-talos.bootstrap-cluster
 test: test-talos.nocloud-proxmox-cloudinit
+test: test-cluster.cert-manager
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -102,7 +103,8 @@ test-bootstrap.config-scheme:
 		          NETWORK_CIDR NETWORK_GATEWAY NETWORK_DNS NETWORK_BRIDGE \
 		          CP_CORES CP_MEMORY_MB CP_DISK_SIZE_GB \
 		          WK_CORES WK_MEMORY_MB WK_DISK_SIZE_GB WK_STORAGE_DISK_SIZE_GB \
-		          TALOS_IMAGE_PLATFORM METALLB_RANGE CA_CERT_PATH CA_KEY_PATH" ; \
+		          TALOS_IMAGE_PLATFORM METALLB_RANGE CA_CERT_PATH CA_KEY_PATH \
+		          CLUSTER_ISSUER_NAME CERT_MANAGER_CHART_VERSION" ; \
 		test -f "$(TOOLS_DIR)/.env.example" \
 		  || { echo "    [FAIL] tools/.env.example missing" >&2 ; exit 1 ; } ; \
 		for k in $$required ; do \
@@ -536,3 +538,89 @@ test-talos.nocloud-proxmox-cloudinit:
 		  || { echo "    [FAIL] docs missing scp guidance for manual snippet upload" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] talos.nocloud-proxmox-cloudinit"
+
+# ---------------------------------------------------------------------------
+# cluster.cert-manager
+# ---------------------------------------------------------------------------
+# Offline structural verification of the Phase-2 cert-manager assets:
+#   - all six tools/cluster/cert-manager/* files exist; the *.sh are executable
+#     and start with the "$${TOOLS_DIR:?...}" preamble.
+#   - install.sh references helm/kubectl/envsubst/cmctl with the right
+#     patterns and includes the openssl pre-validate + 60-day expiry warning.
+#   - cluster-issuer.yaml.tpl is a ClusterIssuer with the placeholder used
+#     for both metadata.name and spec.ca.secretName.
+#   - helm-values.yaml enables installCRDs.
+#   - chart-version.txt is a single semver-with-v line.
+#   - tools/.env.example carries the new keys (with expected defaults).
+#   - tools/Justfile has the three [no-cd] recipes.
+#   - INIT-CLUSTER.md mentions atricore-ca and no longer mentions own-ca.
+#   - top-level README.md references just cert-manager-install.
+.PHONY: test-cluster.cert-manager
+test-cluster.cert-manager:
+	@echo "==> cluster.cert-manager"
+	@$(NIX_DEV) bash -c '\
+		set -eu ; \
+		export TOOLS_DIR="$(TOOLS_DIR)" ; \
+		ASSETS="$(TOOLS_DIR)/cluster/cert-manager" ; \
+		for f in install.sh uninstall.sh smoke.sh ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		  test -x "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f not executable" >&2 ; exit 1 ; } ; \
+		  head -1 "$$ASSETS/$$f" | grep -q "^#!/usr/bin/env bash" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing bash shebang on line 1" >&2 ; exit 1 ; } ; \
+		  head -5 "$$ASSETS/$$f" | grep -qE "\\\$$\\{TOOLS_DIR:\\?" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing TOOLS_DIR preamble in first 5 lines" >&2 ; exit 1 ; } ; \
+		done ; \
+		for f in helm-values.yaml cluster-issuer.yaml.tpl chart-version.txt ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "helm upgrade --install cert-manager jetstack/cert-manager" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing helm upgrade --install pattern" >&2 ; exit 1 ; } ; \
+		grep -q "kubectl create secret tls" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing kubectl create secret tls" >&2 ; exit 1 ; } ; \
+		grep -q "envsubst" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing envsubst" >&2 ; exit 1 ; } ; \
+		grep -q "kubectl apply --server-side" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing kubectl apply --server-side" >&2 ; exit 1 ; } ; \
+		grep -q "cmctl check api" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing cmctl check api" >&2 ; exit 1 ; } ; \
+		grep -q "openssl x509" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing openssl x509 pre-validate" >&2 ; exit 1 ; } ; \
+		grep -q "openssl md5" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing openssl md5 (cert/key pubkey hash compare)" >&2 ; exit 1 ; } ; \
+		grep -qE "days_left|60-day" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing 60-day expiry warning (days_left or 60-day)" >&2 ; exit 1 ; } ; \
+		grep -q "kind: ClusterIssuer" "$$ASSETS/cluster-issuer.yaml.tpl" \
+		  || { echo "    [FAIL] cluster-issuer.yaml.tpl missing kind: ClusterIssuer" >&2 ; exit 1 ; } ; \
+		ph_count=$$(grep -cE "\\\$$\\{CLUSTER_ISSUER_NAME\\}" "$$ASSETS/cluster-issuer.yaml.tpl") ; \
+		[ "$$ph_count" -ge 2 ] \
+		  || { echo "    [FAIL] cluster-issuer.yaml.tpl needs >=2 \\\$${CLUSTER_ISSUER_NAME} placeholders, found $$ph_count" >&2 ; exit 1 ; } ; \
+		grep -qE "secretName: \\\$$\\{CLUSTER_ISSUER_NAME\\}" "$$ASSETS/cluster-issuer.yaml.tpl" \
+		  || { echo "    [FAIL] cluster-issuer.yaml.tpl missing secretName: \\\$${CLUSTER_ISSUER_NAME}" >&2 ; exit 1 ; } ; \
+		grep -q "installCRDs: true" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing installCRDs: true" >&2 ; exit 1 ; } ; \
+		ver=$$(tr -d "[:space:]" < "$$ASSETS/chart-version.txt") ; \
+		echo "$$ver" | grep -qE "^v[0-9]+\.[0-9]+\.[0-9]+$$" \
+		  || { echo "    [FAIL] chart-version.txt does not match ^v[0-9]+\\.[0-9]+\\.[0-9]+\$$ (got: $$ver)" >&2 ; exit 1 ; } ; \
+		grep -qE "^CLUSTER_ISSUER_NAME=atricore-ca" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing CLUSTER_ISSUER_NAME=atricore-ca" >&2 ; exit 1 ; } ; \
+		grep -qE "^CERT_MANAGER_CHART_VERSION=v[0-9.]+" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing CERT_MANAGER_CHART_VERSION=v<semver>" >&2 ; exit 1 ; } ; \
+		for r in cert-manager-install cert-manager-smoke cert-manager-uninstall ; do \
+		  grep -qE "^$${r}:" "$(TOOLS_DIR)/Justfile" \
+		    || { echo "    [FAIL] Justfile lacks recipe: $$r" >&2 ; exit 1 ; } ; \
+		  prev_line=$$(grep -B1 "^$${r}:" "$(TOOLS_DIR)/Justfile" | head -1) ; \
+		  echo "$$prev_line" | grep -qE "^\[no-cd\]" \
+		    || { echo "    [FAIL] Justfile recipe $$r missing [no-cd] attribute on the line above" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "atricore-ca" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing atricore-ca" >&2 ; exit 1 ; } ; \
+		if grep -q "own-ca" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" ; then \
+		  echo "    [FAIL] INIT-CLUSTER.md still mentions own-ca (post-rename)" >&2 ; exit 1 ; \
+		fi ; \
+		grep -q "just cert-manager-install" "$(REPO_ROOT)/README.md" \
+		  || { echo "    [FAIL] README.md does not reference just cert-manager-install" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] cluster.cert-manager"

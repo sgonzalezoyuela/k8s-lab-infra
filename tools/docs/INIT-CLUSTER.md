@@ -190,6 +190,8 @@ Talos patches, Helm values) is rendered from it.
 | `TALOS_IMAGE_PLATFORM` | Must be `nocloud`; Talos only parses Proxmox NoCloud data when booted with the NoCloud Image Factory variant |
 | `METALLB_RANGE` | Phase 2: pool of IPs MetalLB hands to LoadBalancer services |
 | `CA_CERT_PATH` / `CA_KEY_PATH` | Phase 2: paths under `secrets/` for cert-manager `ClusterIssuer` |
+| `CLUSTER_ISSUER_NAME` | Phase 2: name of the cert-manager `ClusterIssuer` and its backing TLS Secret in the `cert-manager` namespace (default `atricore-ca`) |
+| `CERT_MANAGER_CHART_VERSION` | Phase 2: pinned Jetstack cert-manager Helm chart version (e.g. `v1.16.2`). The bundled default lives at `tools/cluster/cert-manager/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 
 ---
 
@@ -262,6 +264,73 @@ make test
 # or, equivalently:
 npm test                          # what the patagon harness uses
 ```
+
+---
+
+## Phase 2: cert-manager (atricore-ca)
+
+Phase 2 is **opt-in** and **not part of `just cluster-up`**. It installs
+cert-manager via Helm and wires a `ClusterIssuer` (default name
+`atricore-ca`) backed by your CA in `secrets/ca.crt` + `secrets/ca.key`.
+
+### Prerequisites
+
+- A working cluster (`just cluster-up` finished and `kubectl get nodes` is
+  green).
+- `KUBECONFIG` exported (the cluster `nix develop` shell does this; if you
+  bypassed it, run `just kubeconfig`).
+- `secrets/ca.crt` and `secrets/ca.key` are present in the cluster
+  directory. They must be a matching cert/key pair (the install script
+  refuses to proceed otherwise).
+- `.env` contains `CLUSTER_ISSUER_NAME` and `CERT_MANAGER_CHART_VERSION`.
+
+### Install
+
+```bash
+just cert-manager-install
+```
+
+The recipe:
+
+1. Validates `CA_CERT_PATH` and `CA_KEY_PATH` exist and that their public
+   key hashes match.
+2. Warns if the CA cert expires in less than 60 days.
+3. `helm upgrade --install cert-manager jetstack/cert-manager` in namespace
+   `cert-manager`, with `--create-namespace` and the pinned chart version.
+4. Server-side-applies the TLS `Secret` named `${CLUSTER_ISSUER_NAME}` in
+   the `cert-manager` namespace.
+5. Server-side-applies the rendered `ClusterIssuer`.
+6. Runs `cmctl check api --wait=2m`.
+
+The recipe is idempotent: re-running it leaves the Helm release at the
+same revision and reports "unchanged" for both Secret and ClusterIssuer.
+
+### Verify
+
+```bash
+kubectl get clusterissuer atricore-ca
+# NAME           READY   AGE
+# atricore-ca    True    1m
+```
+
+### Smoke
+
+```bash
+just cert-manager-smoke
+```
+
+This issues a throwaway `Certificate` (`cm-smoke-test`) signed by the
+ClusterIssuer and waits up to 60s for `Ready=True`. The Certificate and
+its Secret are deleted on exit.
+
+### Uninstall
+
+```bash
+just cert-manager-uninstall
+```
+
+Removes the ClusterIssuer, the CA Secret, the Helm release, and the
+`cert-manager` namespace. Safe to re-run when nothing is installed.
 
 ---
 
@@ -358,8 +427,12 @@ Makefile, package.json     patagon test entrypoint (npm test → make test)
 The bare cluster is the foundation. Phase 2 adds, in order:
 
 1. **MetalLB** — L2-mode load balancer, IP pool from `${METALLB_RANGE}`.
-2. **cert-manager** with a `ClusterIssuer` named `own-ca`, signing certs from
-   `secrets/ca.crt` + `secrets/ca.key`.
+2. **cert-manager** with a `ClusterIssuer` named `atricore-ca` (configurable
+   via `CLUSTER_ISSUER_NAME`), signing certs from `secrets/ca.crt` +
+   `secrets/ca.key`. Install with `just cert-manager-install`; verify with
+   `just cert-manager-smoke`; remove with `just cert-manager-uninstall`. See
+   the [Phase 2: cert-manager (atricore-ca)](#phase-2-cert-manager-atricore-ca)
+   section above for details.
 3. **Longhorn** — replicated block storage (single replica today; expandable
    when you add worker nodes later).
 4. **`ops.justfile-end-to-end`** — polish: full `just up` / `just down`,

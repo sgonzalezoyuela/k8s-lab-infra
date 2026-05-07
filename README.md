@@ -29,8 +29,15 @@ just talos-bootstrap
 just kubeconfig
 kubectl get nodes
 
-# Phase 2 (opt-in): install cert-manager with the atricore-ca ClusterIssuer.
-# This is NOT part of `just cluster-up`. Requires secrets/ca.crt + secrets/ca.key.
+# Phase 2 (opt-in): each step below is independent of `just cluster-up`.
+# MetalLB comes first (everything else benefits from working LoadBalancer IPs).
+just metallb-install
+just metallb-smoke
+# Add the host route once so your workstation can reach LB IPs:
+#   sudo ip route add ${METALLB_RANGE} via ${CP_IP}
+
+# Then cert-manager with the atricore-ca ClusterIssuer.
+# Requires secrets/ca.crt + secrets/ca.key.
 just cert-manager-install
 just cert-manager-smoke
 ```

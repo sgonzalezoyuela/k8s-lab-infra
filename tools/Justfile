@@ -124,3 +124,18 @@ cert-manager-smoke: env-check
 [no-cd]
 cert-manager-uninstall:
     "$TOOLS_DIR/cluster/cert-manager/uninstall.sh"
+
+# Phase 2: install MetalLB in L2 mode + IPAddressPool/L2Advertisement (idempotent).
+[no-cd]
+metallb-install: env-check
+    "$TOOLS_DIR/cluster/metallb/install.sh"
+
+# Phase 2: create a no-backend LoadBalancer Service and assert its IP is in METALLB_RANGE.
+[no-cd]
+metallb-smoke: env-check
+    "$TOOLS_DIR/cluster/metallb/smoke.sh"
+
+# Phase 2: remove the L2Advertisement, the IPAddressPool, the Helm release, and the namespace.
+[no-cd]
+metallb-uninstall:
+    "$TOOLS_DIR/cluster/metallb/uninstall.sh"

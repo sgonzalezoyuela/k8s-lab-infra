@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-06T22:45:37.204Z",
-    "version": 31,
+    "updatedAt": "2026-05-07T14:56:54.631Z",
+    "version": 33,
     "tddMode": "recommended"
   },
   "features": [
@@ -230,6 +230,37 @@
       "companionFile": "cluster.cert-manager-atricore-ca.md",
       "createdAt": "2026-05-06T22:35:57.099Z",
       "updatedAt": "2026-05-06T22:45:37.204Z"
+    },
+    {
+      "id": "cluster.metallb-l2",
+      "description": "Install MetalLB in L2 mode via Helm and configure a default IPAddressPool from ${METALLB_RANGE} plus a matching L2Advertisement so Service type=LoadBalancer gets a routable IP.",
+      "module": "cluster",
+      "priority": 10,
+      "status": "implemented",
+      "acceptance": [
+        "`tools/cluster/metallb/{install.sh,uninstall.sh,smoke.sh,helm-values.yaml,ip-address-pool.yaml.tpl,l2-advertisement.yaml.tpl,chart-version.txt}` all exist; the `*.sh` files are executable and start with the `${TOOLS_DIR:?...}` preamble.",
+        "`tools/.env.example` declares `METALLB_CHART_VERSION=<pinned>` (no `v` prefix; matches `chart-version.txt`). The `bootstrap.config-scheme` test target's required-vars list is extended with `METALLB_CHART_VERSION`. The existing `METALLB_RANGE` entry stays as-is.",
+        "`tools/Justfile` exposes three `[no-cd]` recipes: `metallb-install`, `metallb-smoke`, `metallb-uninstall`. Install and smoke depend on `env-check`.",
+        "`install.sh` pre-validates that `METALLB_RANGE` is a valid CIDR and that neither `${CP_IP}` nor `${WK0_IP}` falls inside it (fail-fast with a clear error); helm-installs the pinned chart in namespace `metallb-system` with `--create-namespace` and `--wait`; applies the rendered IPAddressPool (`default-pool`) and L2Advertisement (`default-l2-adv`) server-side; waits for the IPAddressPool `.status` and the speaker DaemonSet to be Ready.",
+        "`ip-address-pool.yaml.tpl` declares `kind: IPAddressPool`, `metadata.name: default-pool`, `metadata.namespace: metallb-system`, and `spec.addresses: [\"${METALLB_RANGE}\"]` so envsubst produces a valid manifest at install time. `l2-advertisement.yaml.tpl` declares `kind: L2Advertisement`, `metadata.name: default-l2-adv`, `metadata.namespace: metallb-system`, and `spec.ipAddressPools: [default-pool]`.",
+        "Re-running `just metallb-install` against an already-installed cluster is a no-op: `helm upgrade --install` keeps the release at the same revision/chart version, and `kubectl apply --server-side` reports unchanged for both the IPAddressPool and the L2Advertisement.",
+        "`just metallb-uninstall` removes the L2Advertisement, the IPAddressPool, the Helm release, and the `metallb-system` namespace, and is safe to run when nothing is installed (no errors on missing resources).",
+        "`just metallb-smoke` creates a `Service` named `mlb-smoke-test` of type `LoadBalancer` in the `default` namespace (no selector / no backend pods needed), waits for `.status.loadBalancer.ingress[0].ip` to be set within 30s, asserts that IP is inside `${METALLB_RANGE}`, then deletes the Service.",
+        "`tools/docs/INIT-CLUSTER.md` Phase 2 section names MetalLB as the first opt-in service and documents `just metallb-install`, `just metallb-smoke`, `just metallb-uninstall`. The configuration table includes `METALLB_CHART_VERSION` alongside the existing `METALLB_RANGE`. The host-route reminder paragraph is preserved.",
+        "`tools/Makefile` has a new `test-cluster.metallb` target wired into the top-level `test` target. It validates offline: file presence and shebangs/preambles; install.sh references `helm upgrade --install metallb metallb/metallb`, `kubectl apply --server-side`, `envsubst`, `metallb-system`, the CIDR pre-validate (`METALLB_RANGE` and `CP_IP`/`WK0_IP` cross-check); ip-address-pool.yaml.tpl has the required placeholder `${METALLB_RANGE}` and shape (`kind: IPAddressPool`, `metadata.name: default-pool`); l2-advertisement.yaml.tpl has `kind: L2Advertisement`, `metadata.name: default-l2-adv`, references `default-pool`; chart-version.txt matches `^[0-9]+\\.[0-9]+\\.[0-9]+$`; the new env var is in `.env.example`; the new Justfile recipes are present.",
+        "`clusters/k8s4/.env` is updated with `METALLB_CHART_VERSION=<same default>` so `just env-check` continues to pass for the k8s4 cluster.",
+        "`README.md` (top-level) references `just metallb-install` as the first Phase 2 step; clarifies it is NOT part of `cluster-up` and points out the host-route reminder.",
+        "All existing structural tests still pass when run as `npm test` from `clusters/k8s4/` (which runs the tools structural tests + the cluster smoke). The new `test-cluster.metallb` is part of that run."
+      ],
+      "dependsOn": [
+        "talos.bootstrap-cluster",
+        "bootstrap.split-tools-and-clusters"
+      ],
+      "notes": "L2 mode (ARP/NDP), single broadcast domain. Pool/advertisement names hardcoded (default-pool, default-l2-adv). Smoke creates a no-backend Service type=LoadBalancer and verifies an IP from METALLB_RANGE within 30s. cluster-up stays Phase-1; MetalLB is opt-in like cert-manager. Pre-install CIDR sanity check fails fast if CP_IP/WK0_IP overlap METALLB_RANGE. Pinned chart: 0.15.3 (no v prefix; helm's chart version semantics differ from cert-manager).",
+      "version": 1,
+      "companionFile": "cluster.metallb-l2.md",
+      "createdAt": "2026-05-07T14:47:13.562Z",
+      "updatedAt": "2026-05-07T14:56:54.631Z"
     }
   ]
 }

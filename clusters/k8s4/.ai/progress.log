@@ -28,3 +28,5 @@
 2026-05-06T19:01:09.624Z [IMPLEMENTED] <bootstrap.split-tools-and-clusters> Implemented feature bootstrap.split-tools-and-clusters (awaiting review)
 2026-05-06T22:35:57.099Z [CREATE] <cluster.cert-manager-atricore-ca> Created feature cluster.cert-manager-atricore-ca
 2026-05-06T22:45:37.204Z [IMPLEMENTED] <cluster.cert-manager-atricore-ca> Implemented feature cluster.cert-manager-atricore-ca (awaiting review)
+2026-05-07T14:47:13.563Z [CREATE] <cluster.metallb-l2> Created feature cluster.metallb-l2
+2026-05-07T14:56:54.632Z [IMPLEMENTED] <cluster.metallb-l2> Implemented feature cluster.metallb-l2 (awaiting review)

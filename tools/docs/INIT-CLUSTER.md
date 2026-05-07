@@ -188,7 +188,8 @@ Talos patches, Helm values) is rendered from it.
 | `WK_STORAGE_DISK_SIZE_GB` | Worker's second disk reserved for Longhorn (default 200) |
 | `TALOS_VERSION` | Image version, e.g. `v1.13.0` (the `v` prefix is required) |
 | `TALOS_IMAGE_PLATFORM` | Must be `nocloud`; Talos only parses Proxmox NoCloud data when booted with the NoCloud Image Factory variant |
-| `METALLB_RANGE` | Phase 2: pool of IPs MetalLB hands to LoadBalancer services |
+| `METALLB_RANGE` | Phase 2: pool of IPs MetalLB hands to LoadBalancer services. Must be a routable IPv4 CIDR that does **not** contain `CP_IP` or `WK0_IP` (`metallb-install` fails fast otherwise). |
+| `METALLB_CHART_VERSION` | Phase 2: pinned `metallb/metallb` Helm chart version (e.g. `0.15.3`). **No `v` prefix** — that's how the MetalLB chart numbers itself (different from cert-manager). The bundled default lives at `tools/cluster/metallb/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 | `CA_CERT_PATH` / `CA_KEY_PATH` | Phase 2: paths under `secrets/` for cert-manager `ClusterIssuer` |
 | `CLUSTER_ISSUER_NAME` | Phase 2: name of the cert-manager `ClusterIssuer` and its backing TLS Secret in the `cert-manager` namespace (default `atricore-ca`) |
 | `CERT_MANAGER_CHART_VERSION` | Phase 2: pinned Jetstack cert-manager Helm chart version (e.g. `v1.16.2`). The bundled default lives at `tools/cluster/cert-manager/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
@@ -264,6 +265,96 @@ make test
 # or, equivalently:
 npm test                          # what the patagon harness uses
 ```
+
+---
+
+## Phase 2: MetalLB (L2 mode)
+
+Phase 2 is **opt-in** and **not part of `just cluster-up`**. MetalLB is the
+first service installed in Phase 2 because everything else that wants a
+routable IP (cert-manager-issued TLS endpoints, Longhorn UI, future workloads)
+needs `Service` type=LoadBalancer working first.
+
+This recipe installs MetalLB in **L2 mode** (ARP/NDP, single broadcast
+domain — not BGP), sets up a single `IPAddressPool` named `default-pool` from
+`${METALLB_RANGE}`, and a matching `L2Advertisement` named `default-l2-adv`.
+
+### Prerequisites
+
+- A working cluster (`just cluster-up` finished and `kubectl get nodes` is
+  green).
+- `KUBECONFIG` exported (the cluster `nix develop` shell does this; if you
+  bypassed it, run `just kubeconfig`).
+- `.env` contains `METALLB_RANGE` and `METALLB_CHART_VERSION`.
+- `${METALLB_RANGE}` is a valid IPv4 CIDR that does **not** contain
+  `${CP_IP}` or `${WK0_IP}`. The install script fails fast otherwise to
+  prevent ARP wars on the node IPs.
+
+### Install
+
+```bash
+just metallb-install
+```
+
+The recipe:
+
+1. Validates that `METALLB_RANGE` parses as an IPv4 CIDR and that neither
+   `CP_IP` nor `WK0_IP` falls inside it.
+2. `helm upgrade --install metallb metallb/metallb` in namespace
+   `metallb-system`, with `--create-namespace` and the pinned chart version.
+3. Waits for the `metallb-speaker` DaemonSet to roll out (≤2 min).
+4. Server-side-applies the `IPAddressPool/default-pool` rendered from
+   `${METALLB_RANGE}` and the `L2Advertisement/default-l2-adv` that pins it.
+
+The recipe is idempotent: re-running it leaves the Helm release at the
+same revision and reports "unchanged" for both the IPAddressPool and the
+L2Advertisement.
+
+### Verify
+
+```bash
+kubectl -n metallb-system get pods            # controller + speaker Ready
+kubectl get ipaddresspool -A                  # default-pool present
+kubectl get l2advertisement -A                # default-l2-adv present
+```
+
+### Smoke
+
+```bash
+just metallb-smoke
+```
+
+This creates a `Service` named `mlb-smoke-test` of type `LoadBalancer` in
+the `default` namespace (no selector, no backend pods), waits up to 30s for
+`.status.loadBalancer.ingress[0].ip` to be populated, asserts the IP is
+inside `${METALLB_RANGE}`, and deletes the Service. No curl, no backend —
+the only contract being smoke-tested is "MetalLB allocates an IP from the
+pool and surfaces it via the Service status".
+
+### Uninstall
+
+```bash
+just metallb-uninstall
+```
+
+Removes the L2Advertisement, the IPAddressPool, the Helm release, and the
+`metallb-system` namespace. Safe to re-run when nothing is installed.
+
+### Reaching the LoadBalancer IPs from your workstation
+
+Even after MetalLB is installed, your workstation still needs a route to
+`${METALLB_RANGE}`. The pool is intentionally a separate subnet from the
+node IPs (so MetalLB has free ARP space), so the lab gateway does not
+naturally know how to reach it. Add a one-time host route via the control
+plane node:
+
+```bash
+sudo ip route add ${METALLB_RANGE} via ${CP_IP}
+```
+
+The dev shell prints this reminder on entry. The
+[Loadbalancer route](#loadbalancer-route-one-time-after-phase-2) section
+below has the same command spelled out.
 
 ---
 

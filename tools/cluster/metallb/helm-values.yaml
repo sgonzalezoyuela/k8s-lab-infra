@@ -1,0 +1,11 @@
+# Minimal MetalLB values — controller + speaker DaemonSet only; no FRR
+# (we run L2/ARP, not BGP).
+controller:
+  enabled: true
+speaker:
+  enabled: true
+  # Keep upstream-default tolerations so the speaker DaemonSet runs on the
+  # control plane node as well as workers. This is what lets a single-node
+  # cluster (cp-only) still serve LoadBalancer IPs.
+crds:
+  enabled: true

@@ -42,6 +42,7 @@ test: test-talos.machine-configs
 test: test-talos.bootstrap-cluster
 test: test-talos.nocloud-proxmox-cloudinit
 test: test-cluster.cert-manager
+test: test-cluster.metallb
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -103,7 +104,8 @@ test-bootstrap.config-scheme:
 		          NETWORK_CIDR NETWORK_GATEWAY NETWORK_DNS NETWORK_BRIDGE \
 		          CP_CORES CP_MEMORY_MB CP_DISK_SIZE_GB \
 		          WK_CORES WK_MEMORY_MB WK_DISK_SIZE_GB WK_STORAGE_DISK_SIZE_GB \
-		          TALOS_IMAGE_PLATFORM METALLB_RANGE CA_CERT_PATH CA_KEY_PATH \
+		          TALOS_IMAGE_PLATFORM METALLB_RANGE METALLB_CHART_VERSION \
+		          CA_CERT_PATH CA_KEY_PATH \
 		          CLUSTER_ISSUER_NAME CERT_MANAGER_CHART_VERSION" ; \
 		test -f "$(TOOLS_DIR)/.env.example" \
 		  || { echo "    [FAIL] tools/.env.example missing" >&2 ; exit 1 ; } ; \
@@ -624,3 +626,112 @@ test-cluster.cert-manager:
 		  || { echo "    [FAIL] README.md does not reference just cert-manager-install" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] cluster.cert-manager"
+
+# ---------------------------------------------------------------------------
+# cluster.metallb
+# ---------------------------------------------------------------------------
+# Offline structural verification of the Phase-2 MetalLB (L2-mode) assets:
+#   - all seven tools/cluster/metallb/* files exist; the *.sh are executable
+#     and start with the "$${TOOLS_DIR:?...}" preamble.
+#   - install.sh references helm/kubectl/envsubst with the right patterns
+#     and includes the CIDR pre-validate (METALLB_RANGE shape + CP_IP/WK0_IP
+#     overlap check, via the ip_to_int arithmetic helper).
+#   - ip-address-pool.yaml.tpl is an IPAddressPool named default-pool in
+#     metallb-system with the ${METALLB_RANGE} placeholder.
+#   - l2-advertisement.yaml.tpl is an L2Advertisement named default-l2-adv
+#     referencing default-pool.
+#   - chart-version.txt matches ^[0-9]+\.[0-9]+\.[0-9]+$ (NO `v` prefix; this
+#     is intentional, contrast with cert-manager).
+#   - tools/.env.example carries METALLB_CHART_VERSION (with expected default).
+#   - tools/Justfile has the three [no-cd] recipes.
+#   - INIT-CLUSTER.md mentions metallb-install.
+#   - top-level README.md references just metallb-install.
+.PHONY: test-cluster.metallb
+test-cluster.metallb:
+	@echo "==> cluster.metallb"
+	@$(NIX_DEV) bash -c '\
+		set -eu ; \
+		export TOOLS_DIR="$(TOOLS_DIR)" ; \
+		ASSETS="$(TOOLS_DIR)/cluster/metallb" ; \
+		for f in install.sh uninstall.sh smoke.sh ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		  test -x "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f not executable" >&2 ; exit 1 ; } ; \
+		  head -1 "$$ASSETS/$$f" | grep -q "^#!/usr/bin/env bash" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing bash shebang on line 1" >&2 ; exit 1 ; } ; \
+		  head -5 "$$ASSETS/$$f" | grep -qE "\\\$$\\{TOOLS_DIR:\\?" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing TOOLS_DIR preamble in first 5 lines" >&2 ; exit 1 ; } ; \
+		done ; \
+		for f in helm-values.yaml ip-address-pool.yaml.tpl l2-advertisement.yaml.tpl chart-version.txt ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "helm upgrade --install metallb metallb/metallb" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing helm upgrade --install metallb metallb/metallb" >&2 ; exit 1 ; } ; \
+		grep -q "kubectl apply --server-side" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing kubectl apply --server-side" >&2 ; exit 1 ; } ; \
+		grep -q "envsubst" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing envsubst" >&2 ; exit 1 ; } ; \
+		grep -q "metallb-system" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing metallb-system namespace" >&2 ; exit 1 ; } ; \
+		grep -q "METALLB_RANGE" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing METALLB_RANGE handling" >&2 ; exit 1 ; } ; \
+		grep -q "CP_IP" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing CP_IP overlap check" >&2 ; exit 1 ; } ; \
+		grep -q "WK0_IP" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing WK0_IP overlap check" >&2 ; exit 1 ; } ; \
+		grep -q "ip_to_int" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing CIDR ip_to_int arithmetic helper" >&2 ; exit 1 ; } ; \
+		grep -q "rollout status daemonset/metallb-speaker" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing speaker DaemonSet rollout wait" >&2 ; exit 1 ; } ; \
+		grep -q "kind: IPAddressPool" "$$ASSETS/ip-address-pool.yaml.tpl" \
+		  || { echo "    [FAIL] ip-address-pool.yaml.tpl missing kind: IPAddressPool" >&2 ; exit 1 ; } ; \
+		grep -qE "name: default-pool" "$$ASSETS/ip-address-pool.yaml.tpl" \
+		  || { echo "    [FAIL] ip-address-pool.yaml.tpl missing name: default-pool" >&2 ; exit 1 ; } ; \
+		grep -qE "namespace: metallb-system" "$$ASSETS/ip-address-pool.yaml.tpl" \
+		  || { echo "    [FAIL] ip-address-pool.yaml.tpl missing namespace: metallb-system" >&2 ; exit 1 ; } ; \
+		grep -qE "\\\$$\\{METALLB_RANGE\\}" "$$ASSETS/ip-address-pool.yaml.tpl" \
+		  || { echo "    [FAIL] ip-address-pool.yaml.tpl missing \\\$${METALLB_RANGE} placeholder" >&2 ; exit 1 ; } ; \
+		grep -q "kind: L2Advertisement" "$$ASSETS/l2-advertisement.yaml.tpl" \
+		  || { echo "    [FAIL] l2-advertisement.yaml.tpl missing kind: L2Advertisement" >&2 ; exit 1 ; } ; \
+		grep -qE "name: default-l2-adv" "$$ASSETS/l2-advertisement.yaml.tpl" \
+		  || { echo "    [FAIL] l2-advertisement.yaml.tpl missing name: default-l2-adv" >&2 ; exit 1 ; } ; \
+		grep -qE "namespace: metallb-system" "$$ASSETS/l2-advertisement.yaml.tpl" \
+		  || { echo "    [FAIL] l2-advertisement.yaml.tpl missing namespace: metallb-system" >&2 ; exit 1 ; } ; \
+		grep -qE "default-pool" "$$ASSETS/l2-advertisement.yaml.tpl" \
+		  || { echo "    [FAIL] l2-advertisement.yaml.tpl does not reference default-pool" >&2 ; exit 1 ; } ; \
+		grep -q "type: LoadBalancer" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh does not create a LoadBalancer Service" >&2 ; exit 1 ; } ; \
+		grep -q "mlb-smoke-test" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh does not name the Service mlb-smoke-test" >&2 ; exit 1 ; } ; \
+		grep -q "loadBalancer.ingress" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh does not poll .status.loadBalancer.ingress" >&2 ; exit 1 ; } ; \
+		grep -qE "l2advertisement[[:space:]]+default-l2-adv" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh does not delete L2Advertisement default-l2-adv" >&2 ; exit 1 ; } ; \
+		grep -qE "ipaddresspool[[:space:]]+default-pool" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh does not delete IPAddressPool default-pool" >&2 ; exit 1 ; } ; \
+		grep -q "helm uninstall metallb" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh does not helm uninstall metallb" >&2 ; exit 1 ; } ; \
+		ver=$$(tr -d "[:space:]" < "$$ASSETS/chart-version.txt") ; \
+		echo "$$ver" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$$" \
+		  || { echo "    [FAIL] chart-version.txt does not match ^[0-9]+\\.[0-9]+\\.[0-9]+\$$ (got: $$ver; note: NO v prefix, unlike cert-manager)" >&2 ; exit 1 ; } ; \
+		grep -qE "^METALLB_RANGE=" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing METALLB_RANGE" >&2 ; exit 1 ; } ; \
+		grep -qE "^METALLB_CHART_VERSION=[0-9]+\.[0-9]+\.[0-9]+" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing METALLB_CHART_VERSION=<bare semver>" >&2 ; exit 1 ; } ; \
+		for r in metallb-install metallb-smoke metallb-uninstall ; do \
+		  grep -qE "^$${r}:" "$(TOOLS_DIR)/Justfile" \
+		    || { echo "    [FAIL] Justfile lacks recipe: $$r" >&2 ; exit 1 ; } ; \
+		  prev_line=$$(grep -B1 "^$${r}:" "$(TOOLS_DIR)/Justfile" | head -1) ; \
+		  echo "$$prev_line" | grep -qE "^\[no-cd\]" \
+		    || { echo "    [FAIL] Justfile recipe $$r missing [no-cd] attribute on the line above" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -qi "metallb" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing MetalLB coverage" >&2 ; exit 1 ; } ; \
+		grep -q "metallb-install" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing metallb-install recipe reference" >&2 ; exit 1 ; } ; \
+		grep -q "just metallb-install" "$(REPO_ROOT)/README.md" \
+		  || { echo "    [FAIL] README.md does not reference just metallb-install" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] cluster.metallb"

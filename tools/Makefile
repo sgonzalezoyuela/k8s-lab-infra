@@ -685,6 +685,13 @@ test-cluster.metallb:
 		  || { echo "    [FAIL] install.sh missing CIDR ip_to_int arithmetic helper" >&2 ; exit 1 ; } ; \
 		grep -q "rollout status daemonset/metallb-speaker" "$$ASSETS/install.sh" \
 		  || { echo "    [FAIL] install.sh missing speaker DaemonSet rollout wait" >&2 ; exit 1 ; } ; \
+		grep -q "pod-security.kubernetes.io/enforce: privileged" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh must label metallb-system namespace with PSA enforce=privileged (required by Talos default baseline PSA)" >&2 ; exit 1 ; } ; \
+		grep -qE "kind:[[:space:]]*Namespace" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh must create the namespace explicitly (kubectl apply -f - <<EOF) before helm so PSA labels are applied; helm --create-namespace cannot label" >&2 ; exit 1 ; } ; \
+		grep -qE "frr:[[:space:]]*$$" "$$ASSETS/helm-values.yaml" \
+		  && grep -A1 -E "frr:[[:space:]]*$$" "$$ASSETS/helm-values.yaml" | grep -qE "enabled:[[:space:]]*false" \
+		  || { echo "    [FAIL] helm-values.yaml must explicitly set speaker.frr.enabled=false (chart 0.15.x flipped the default to true; we are L2 not BGP)" >&2 ; exit 1 ; } ; \
 		grep -q "kind: IPAddressPool" "$$ASSETS/ip-address-pool.yaml.tpl" \
 		  || { echo "    [FAIL] ip-address-pool.yaml.tpl missing kind: IPAddressPool" >&2 ; exit 1 ; } ; \
 		grep -qE "name: default-pool" "$$ASSETS/ip-address-pool.yaml.tpl" \

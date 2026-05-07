@@ -60,10 +60,27 @@ if [ "$pinned_default" != "unknown" ] && [ "$pinned_default" != "$METALLB_CHART_
   echo "warn: .env METALLB_CHART_VERSION=$METALLB_CHART_VERSION differs from $ASSETS/chart-version.txt=$pinned_default; using .env value" >&2
 fi
 
+# Pre-create the namespace with privileged Pod Security Admission labels.
+# Talos defaults to enforce=baseline cluster-wide for namespaces with no
+# explicit label, but the speaker DaemonSet needs hostNetwork, hostPort
+# 7472/7473/7946, and NET_ADMIN/NET_RAW/SYS_ADMIN capabilities — all
+# forbidden under baseline. Server-side apply makes this idempotent and
+# keeps the labels even if helm later "owns" the namespace.
+kubectl apply --server-side --field-manager=metallb-install -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $NS
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+EOF
+
 helm repo add metallb https://metallb.github.io/metallb --force-update >/dev/null
 helm repo update metallb >/dev/null
 helm upgrade --install metallb metallb/metallb \
-  --namespace "$NS" --create-namespace \
+  --namespace "$NS" \
   --version "$METALLB_CHART_VERSION" \
   -f "$ASSETS/helm-values.yaml" \
   --wait

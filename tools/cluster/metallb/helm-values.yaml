@@ -1,9 +1,17 @@
 # Minimal MetalLB values — controller + speaker DaemonSet only; no FRR
 # (we run L2/ARP, not BGP).
+#
+# Chart 0.15.x flipped the default to speaker.frr.enabled=true, which adds
+# `frr`, `reloader`, and `frr-metrics` sidecars to the speaker pod. Those
+# sidecars are only useful for BGP and bring extra image pulls + an FRR
+# RBAC surface. We're L2-only on a flat /24, so we explicitly disable them.
 controller:
   enabled: true
 speaker:
   enabled: true
+  # Disable FRR sidecars — we don't speak BGP.
+  frr:
+    enabled: false
   # Keep upstream-default tolerations so the speaker DaemonSet runs on the
   # control plane node as well as workers. This is what lets a single-node
   # cluster (cp-only) still serve LoadBalancer IPs.

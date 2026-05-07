@@ -48,6 +48,14 @@ just cert-manager-smoke
 # placeholders.
 just newt-install
 just newt-smoke
+
+# ingress-nginx — depends on cert-manager (for the wildcard default cert)
+# AND MetalLB (for the pinned LoadBalancer IP). NOT part of `just cluster-up`.
+# Before running, ensure INGRESS_LB_IP is inside METALLB_RANGE and free.
+# Point your DNS A/AAAA records (e.g. app.k8s4.lab.atricore.io) at INGRESS_LB_IP,
+# and reach the LB IP from your workstation via the host route above.
+just ingress-install     # ingress controller (depends on cert-manager + metallb)
+just ingress-smoke
 ```
 
 The cluster's `nix develop` shell exports:

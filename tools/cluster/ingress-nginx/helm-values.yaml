@@ -1,0 +1,60 @@
+# ingress-nginx values — restricted-PSA-compliant, single ingress class
+# (`nginx`, marked default), pinned LoadBalancer service. Snippet annotations
+# are disabled (chart default in 4.x; we pin it explicitly because letting
+# arbitrary snippet annotations through is the historical CVE foothold for
+# this controller).
+#
+# loadBalancerIP and the controller.extraArgs.default-ssl-certificate are
+# NOT set here — they're injected at install time via `helm --set` because
+# they depend on .env (INGRESS_LB_IP, INGRESS_DEFAULT_TLS_SECRET) and we
+# want one source of truth.
+controller:
+  ingressClassResource:
+    name: nginx
+    enabled: true
+    default: true
+  ingressClass: nginx
+  # Snippet annotations let users smuggle arbitrary nginx config through
+  # `nginx.ingress.kubernetes.io/configuration-snippet` etc. Several CVEs in
+  # 2023–2024 (most notably CVE-2025-1974) abused this surface; the chart
+  # default flipped to false. We pin it explicitly so a future chart bump
+  # can't silently re-enable it.
+  allowSnippetAnnotations: false
+  watchIngressWithoutClass: false
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Cluster
+  # Restricted Pod Security Admission compliance. The controller pod runs
+  # as non-root (uid 101 == upstream nginx user), all caps dropped, with
+  # the single NET_BIND_SERVICE cap re-added so it can listen on 80/443.
+  # This is exactly the set "restricted" PSA still permits.
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 101
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+      add:
+        - NET_BIND_SERVICE
+    seccompProfile:
+      type: RuntimeDefault
+  config:
+    # Trust X-Forwarded-* headers; the lab terminates TLS on the controller
+    # itself today and there is no upstream L7 proxy yet, but we want this
+    # default already wired so adding one later is config-only.
+    use-forwarded-headers: "true"
+    enable-real-ip: "true"
+  admissionWebhooks:
+    enabled: true
+# No fallback backend — the wildcard default-ssl Certificate handles
+# unmatched-SNI clients with a valid TLS handshake; an unmatched-host HTTP
+# request gets a 404 directly from nginx, which is preferable to a fake
+# "default" page.
+defaultBackend:
+  enabled: false

@@ -44,6 +44,7 @@ test: test-talos.nocloud-proxmox-cloudinit
 test: test-cluster.cert-manager
 test: test-cluster.metallb
 test: test-cluster.newt
+test: test-cluster.ingress-nginx
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -108,7 +109,8 @@ test-bootstrap.config-scheme:
 		          TALOS_IMAGE_PLATFORM METALLB_RANGE METALLB_CHART_VERSION \
 		          CA_CERT_PATH CA_KEY_PATH \
 		          CLUSTER_ISSUER_NAME CERT_MANAGER_CHART_VERSION \
-		          PANGOLIN_ENDPOINT NEWT_ID NEWT_SECRET NEWT_IMAGE_TAG" ; \
+		          PANGOLIN_ENDPOINT NEWT_ID NEWT_SECRET NEWT_IMAGE_TAG \
+		          INGRESS_NGINX_CHART_VERSION INGRESS_LB_IP INGRESS_DEFAULT_TLS_SECRET" ; \
 		test -f "$(TOOLS_DIR)/.env.example" \
 		  || { echo "    [FAIL] tools/.env.example missing" >&2 ; exit 1 ; } ; \
 		for k in $$required ; do \
@@ -883,3 +885,137 @@ test-cluster.newt:
 		  || { echo "    [FAIL] README.md does not reference just newt-install" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] cluster.newt"
+
+# ---------------------------------------------------------------------------
+# cluster.ingress-nginx
+# ---------------------------------------------------------------------------
+# Offline structural verification of the Phase-2 ingress-nginx assets:
+#   - all six tools/cluster/ingress-nginx/* files exist; the *.sh are
+#     executable and start with the "$${TOOLS_DIR:?...}" preamble.
+#   - install.sh references the helm install pattern, server-side apply,
+#     loadBalancerIP=, default-ssl-certificate=, INGRESS_LB_IP,
+#     INGRESS_DEFAULT_TLS_SECRET, restricted PSA enforce label, the
+#     ip_to_int CIDR helper, and --wait.
+#   - helm-values.yaml has ingressClassResource{name=nginx, default=true},
+#     allowSnippetAnnotations=false, runAsNonRoot=true,
+#     readOnlyRootFilesystem=true, NET_BIND_SERVICE, defaultBackend.enabled=false.
+#   - default-ssl-cert.yaml.tpl is a Certificate referencing the three
+#     placeholders (CLUSTER_DOMAIN/CLUSTER_ISSUER_NAME/INGRESS_DEFAULT_TLS_SECRET)
+#     and includes the *. wildcard form.
+#   - smoke.sh references helm status, rollout status of the controller
+#     deployment, the Service.status.loadBalancer.ingress[0].ip jsonpath,
+#     and INGRESS_LB_IP.
+#   - chart-version.txt matches ^[0-9]+\.[0-9]+\.[0-9]+$ (NO `v` prefix —
+#     ingress-nginx chart numbers itself like metallb, not cert-manager).
+#   - tools/.env.example carries the three new env keys.
+#   - tools/Justfile has the three [no-cd] recipes.
+#   - INIT-CLUSTER.md mentions ingress-install.
+#   - top-level README.md references just ingress-install.
+.PHONY: test-cluster.ingress-nginx
+test-cluster.ingress-nginx:
+	@echo "==> cluster.ingress-nginx"
+	@$(NIX_DEV) bash -c '\
+		set -eu ; \
+		export TOOLS_DIR="$(TOOLS_DIR)" ; \
+		ASSETS="$(TOOLS_DIR)/cluster/ingress-nginx" ; \
+		for f in install.sh uninstall.sh smoke.sh ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		  test -x "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f not executable" >&2 ; exit 1 ; } ; \
+		  head -1 "$$ASSETS/$$f" | grep -q "^#!/usr/bin/env bash" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing bash shebang on line 1" >&2 ; exit 1 ; } ; \
+		  head -5 "$$ASSETS/$$f" | grep -qE "\\\$$\\{TOOLS_DIR:\\?" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing TOOLS_DIR preamble in first 5 lines" >&2 ; exit 1 ; } ; \
+		done ; \
+		for f in helm-values.yaml default-ssl-cert.yaml.tpl chart-version.txt ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx" >&2 ; exit 1 ; } ; \
+		grep -q "kubectl apply --server-side" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing kubectl apply --server-side" >&2 ; exit 1 ; } ; \
+		grep -q "loadBalancerIP=" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing loadBalancerIP= --set" >&2 ; exit 1 ; } ; \
+		grep -q "default-ssl-certificate=" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing default-ssl-certificate= --set" >&2 ; exit 1 ; } ; \
+		grep -q "INGRESS_LB_IP" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing INGRESS_LB_IP handling" >&2 ; exit 1 ; } ; \
+		grep -q "INGRESS_DEFAULT_TLS_SECRET" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing INGRESS_DEFAULT_TLS_SECRET handling" >&2 ; exit 1 ; } ; \
+		grep -q "pod-security.kubernetes.io/enforce: restricted" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh must label ingress-nginx namespace with PSA enforce=restricted" >&2 ; exit 1 ; } ; \
+		grep -qE "kind:[[:space:]]*Namespace" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh must create the namespace explicitly so PSA labels are applied" >&2 ; exit 1 ; } ; \
+		grep -q "ip_to_int" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing ip_to_int CIDR overlap math (INGRESS_LB_IP must be inside METALLB_RANGE)" >&2 ; exit 1 ; } ; \
+		grep -q -- "--wait" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh helm upgrade missing --wait" >&2 ; exit 1 ; } ; \
+		grep -q "envsubst" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing envsubst" >&2 ; exit 1 ; } ; \
+		grep -q "wait --for=condition=Ready certificate" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh does not wait for the wildcard Certificate to be Ready" >&2 ; exit 1 ; } ; \
+		grep -qE "ingressClassResource:" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing ingressClassResource:" >&2 ; exit 1 ; } ; \
+		grep -A4 "ingressClassResource:" "$$ASSETS/helm-values.yaml" | grep -qE "name:[[:space:]]*nginx" \
+		  || { echo "    [FAIL] helm-values.yaml ingressClassResource missing name: nginx" >&2 ; exit 1 ; } ; \
+		grep -A4 "ingressClassResource:" "$$ASSETS/helm-values.yaml" | grep -qE "default:[[:space:]]*true" \
+		  || { echo "    [FAIL] helm-values.yaml ingressClassResource missing default: true" >&2 ; exit 1 ; } ; \
+		grep -qE "allowSnippetAnnotations:[[:space:]]*false" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing allowSnippetAnnotations: false (CVE foothold; must be explicit)" >&2 ; exit 1 ; } ; \
+		grep -q "runAsNonRoot: true" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing runAsNonRoot: true" >&2 ; exit 1 ; } ; \
+		grep -q "readOnlyRootFilesystem: true" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing readOnlyRootFilesystem: true" >&2 ; exit 1 ; } ; \
+		grep -q "NET_BIND_SERVICE" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing NET_BIND_SERVICE capability" >&2 ; exit 1 ; } ; \
+		grep -qE "defaultBackend:" "$$ASSETS/helm-values.yaml" \
+		  && grep -A1 -E "^defaultBackend:" "$$ASSETS/helm-values.yaml" | grep -qE "enabled:[[:space:]]*false" \
+		  || { echo "    [FAIL] helm-values.yaml must set defaultBackend.enabled: false" >&2 ; exit 1 ; } ; \
+		grep -qE "type:[[:space:]]*LoadBalancer" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing service.type: LoadBalancer" >&2 ; exit 1 ; } ; \
+		grep -q "kind: Certificate" "$$ASSETS/default-ssl-cert.yaml.tpl" \
+		  || { echo "    [FAIL] default-ssl-cert.yaml.tpl missing kind: Certificate" >&2 ; exit 1 ; } ; \
+		grep -qE "namespace:[[:space:]]*ingress-nginx" "$$ASSETS/default-ssl-cert.yaml.tpl" \
+		  || { echo "    [FAIL] default-ssl-cert.yaml.tpl missing namespace: ingress-nginx" >&2 ; exit 1 ; } ; \
+		grep -qE "kind:[[:space:]]*ClusterIssuer" "$$ASSETS/default-ssl-cert.yaml.tpl" \
+		  || { echo "    [FAIL] default-ssl-cert.yaml.tpl missing issuerRef.kind: ClusterIssuer" >&2 ; exit 1 ; } ; \
+		grep -qE "\\\$$\\{CLUSTER_DOMAIN\\}" "$$ASSETS/default-ssl-cert.yaml.tpl" \
+		  || { echo "    [FAIL] default-ssl-cert.yaml.tpl missing \\\$${CLUSTER_DOMAIN} placeholder" >&2 ; exit 1 ; } ; \
+		grep -qE "\\\$$\\{CLUSTER_ISSUER_NAME\\}" "$$ASSETS/default-ssl-cert.yaml.tpl" \
+		  || { echo "    [FAIL] default-ssl-cert.yaml.tpl missing \\\$${CLUSTER_ISSUER_NAME} placeholder" >&2 ; exit 1 ; } ; \
+		grep -qE "\\\$$\\{INGRESS_DEFAULT_TLS_SECRET\\}" "$$ASSETS/default-ssl-cert.yaml.tpl" \
+		  || { echo "    [FAIL] default-ssl-cert.yaml.tpl missing \\\$${INGRESS_DEFAULT_TLS_SECRET} placeholder" >&2 ; exit 1 ; } ; \
+		grep -qE "\\*\\.\\\$$\\{CLUSTER_DOMAIN\\}" "$$ASSETS/default-ssl-cert.yaml.tpl" \
+		  || { echo "    [FAIL] default-ssl-cert.yaml.tpl missing wildcard *.\\\$${CLUSTER_DOMAIN} dnsName" >&2 ; exit 1 ; } ; \
+		grep -q "helm" "$$ASSETS/smoke.sh" && grep -q "status ingress-nginx" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing helm status ingress-nginx" >&2 ; exit 1 ; } ; \
+		grep -q "rollout status deployment/ingress-nginx-controller" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing rollout status deployment/ingress-nginx-controller" >&2 ; exit 1 ; } ; \
+		grep -q "loadBalancer.ingress\\[0\\].ip" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing .status.loadBalancer.ingress[0].ip jsonpath" >&2 ; exit 1 ; } ; \
+		grep -q "INGRESS_LB_IP" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing INGRESS_LB_IP comparison" >&2 ; exit 1 ; } ; \
+		ver=$$(tr -d "[:space:]" < "$$ASSETS/chart-version.txt") ; \
+		echo "$$ver" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$$" \
+		  || { echo "    [FAIL] chart-version.txt does not match ^[0-9]+\\.[0-9]+\\.[0-9]+\$$ (got: $$ver; note: NO v prefix, matches metallb)" >&2 ; exit 1 ; } ; \
+		grep -qE "^INGRESS_NGINX_CHART_VERSION=[0-9]+\.[0-9]+\.[0-9]+" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing INGRESS_NGINX_CHART_VERSION=<bare semver>" >&2 ; exit 1 ; } ; \
+		grep -qE "^INGRESS_LB_IP=" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing INGRESS_LB_IP" >&2 ; exit 1 ; } ; \
+		grep -qE "^INGRESS_DEFAULT_TLS_SECRET=" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing INGRESS_DEFAULT_TLS_SECRET" >&2 ; exit 1 ; } ; \
+		for r in ingress-install ingress-smoke ingress-uninstall ; do \
+		  grep -qE "^$${r}:" "$(TOOLS_DIR)/Justfile" \
+		    || { echo "    [FAIL] Justfile lacks recipe: $$r" >&2 ; exit 1 ; } ; \
+		  prev_line=$$(grep -B1 "^$${r}:" "$(TOOLS_DIR)/Justfile" | head -1) ; \
+		  echo "$$prev_line" | grep -qE "^\[no-cd\]" \
+		    || { echo "    [FAIL] Justfile recipe $$r missing [no-cd] attribute on the line above" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "ingress-install" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing ingress-install recipe reference" >&2 ; exit 1 ; } ; \
+		grep -q "just ingress-install" "$(REPO_ROOT)/README.md" \
+		  || { echo "    [FAIL] README.md does not reference just ingress-install" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] cluster.ingress-nginx"

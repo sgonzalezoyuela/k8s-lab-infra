@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-07T16:17:24.094Z",
-    "version": 36,
+    "updatedAt": "2026-05-07T18:15:46.417Z",
+    "version": 38,
     "tddMode": "recommended"
   },
   "features": [
@@ -294,6 +294,38 @@
       "companionFile": "cluster.newt-pangolin-client.md",
       "createdAt": "2026-05-07T16:05:50.797Z",
       "updatedAt": "2026-05-07T16:17:24.094Z"
+    },
+    {
+      "id": "cluster.ingress-nginx",
+      "description": "Install ingress-nginx with restricted PSA, pinned LoadBalancer IP from MetalLB, and a wildcard *.${CLUSTER_DOMAIN} default-SSL Certificate signed by atricore-ca via cert-manager.",
+      "module": "cluster",
+      "priority": 12,
+      "status": "implemented",
+      "acceptance": [
+        "`tools/cluster/ingress-nginx/{install.sh,uninstall.sh,smoke.sh,helm-values.yaml,default-ssl-cert.yaml.tpl,chart-version.txt}` exist; `*.sh` are executable and start with the `${TOOLS_DIR:?...}` preamble.",
+        "`tools/.env.example` declares `INGRESS_NGINX_CHART_VERSION=<pinned>` (matches `chart-version.txt`), `INGRESS_LB_IP=10.4.200.10`, `INGRESS_DEFAULT_TLS_SECRET=ingress-default-tls`. The `bootstrap.config-scheme` test required-vars list is extended with all three.",
+        "`tools/Justfile` exposes three `[no-cd]` recipes: `ingress-install`, `ingress-smoke`, `ingress-uninstall`. Install and smoke depend on `env-check`.",
+        "`install.sh` validates `INGRESS_LB_IP` falls inside `METALLB_RANGE` using bitmask CIDR math (fail-fast); pre-creates the `ingress-nginx` namespace with `pod-security.kubernetes.io/enforce: restricted`; helm-installs the pinned chart with `--set controller.service.loadBalancerIP=$INGRESS_LB_IP` and `--set controller.extraArgs.default-ssl-certificate=ingress-nginx/$INGRESS_DEFAULT_TLS_SECRET --wait`; envsubsts and applies the wildcard Certificate; waits for it Ready ≤60s.",
+        "`helm-values.yaml` declares `controller.ingressClassResource.name=nginx`, `default=true`, `controller.allowSnippetAnnotations: false`, `controller.containerSecurityContext` with `runAsNonRoot: true`, `runAsUser: 101`, `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `capabilities.add: [NET_BIND_SERVICE]`, `defaultBackend.enabled: false`, `controller.service.type: LoadBalancer`.",
+        "`default-ssl-cert.yaml.tpl` declares `kind: Certificate`, `metadata.namespace: ingress-nginx`, `metadata.name: ${INGRESS_DEFAULT_TLS_SECRET}`, `spec.secretName: ${INGRESS_DEFAULT_TLS_SECRET}`, `spec.dnsNames` covering `*.${CLUSTER_DOMAIN}` and `${CLUSTER_DOMAIN}`, `spec.issuerRef.name: ${CLUSTER_ISSUER_NAME}`, `spec.issuerRef.kind: ClusterIssuer`.",
+        "Re-running `just ingress-install` is a no-op: `helm upgrade --install` reports unchanged; `kubectl apply --server-side` reports unchanged for the namespace and the wildcard Certificate.",
+        "`just ingress-uninstall` removes the wildcard Certificate, the default-tls Secret, the Helm release, and the `ingress-nginx` namespace; safe to run when nothing is installed (no errors on missing resources).",
+        "`just ingress-smoke` runs `helm -n ingress-nginx status ingress-nginx`, `kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=60s`, and asserts that `Service/ingress-nginx-controller.status.loadBalancer.ingress[0].ip` equals `${INGRESS_LB_IP}` (catches the silent failure where MetalLB couldn't allocate the pinned IP).",
+        "`tools/Makefile` has a new `test-cluster.ingress-nginx` target wired into the top-level `test:` aggregator. Offline assertions: file presence + executable + preamble; install.sh references `helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx`, `kubectl apply --server-side`, `loadBalancerIP=`, `default-ssl-certificate=`, `INGRESS_LB_IP`, `INGRESS_DEFAULT_TLS_SECRET`, `pod-security.kubernetes.io/enforce: restricted`, `ip_to_int` (CIDR overlap math); helm-values.yaml has `ingressClassResource:` with `name: nginx` and `default: true`, `allowSnippetAnnotations: false`, `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, `NET_BIND_SERVICE`; default-ssl-cert.yaml.tpl has `kind: Certificate`, `${CLUSTER_DOMAIN}` placeholder, `${CLUSTER_ISSUER_NAME}` placeholder; smoke.sh references `helm status`, `rollout status deployment/ingress-nginx-controller`, `loadBalancer.ingress[0].ip`; chart-version.txt matches `^[0-9]+\\.[0-9]+\\.[0-9]+$`; .env.example has `^INGRESS_NGINX_CHART_VERSION=[0-9]+\\.[0-9]+\\.[0-9]+`, `^INGRESS_LB_IP=`, `^INGRESS_DEFAULT_TLS_SECRET=`; Justfile has the three recipes each preceded by `[no-cd]`.",
+        "`tools/docs/INIT-CLUSTER.md` Phase 2 gains an 'ingress-nginx' subsection placed AFTER cert-manager (since it depends on cert-manager + MetalLB): prerequisites, the three recipes, DNS guidance (point A records at `INGRESS_LB_IP` plus the existing host-route reminder), and an example Ingress YAML snippet showing the `cert-manager.io/cluster-issuer: atricore-ca` annotation flow. Configuration table gains the three new env keys.",
+        "`README.md` (top-level) references `just ingress-install` in the per-cluster Phase 2 workflow as the fourth opt-in step (after metallb/cert-manager/newt); clarifies it depends on cert-manager and MetalLB being installed first and is NOT part of `cluster-up`.",
+        "`clusters/k8s4/.env` is updated with `INGRESS_NGINX_CHART_VERSION=4.15.1`, `INGRESS_LB_IP=10.4.200.10`, `INGRESS_DEFAULT_TLS_SECRET=ingress-default-tls` so `just env-check` continues to pass.",
+        "All existing structural tests still pass when run as `npm test` from `clusters/k8s4/` (which runs the tools structural tests + the cluster smoke). The new `test-cluster.ingress-nginx` is part of that run."
+      ],
+      "dependsOn": [
+        "cluster.cert-manager-atricore-ca",
+        "cluster.metallb-l2",
+        "bootstrap.split-tools-and-clusters"
+      ],
+      "notes": "Pinned ingress-nginx chart 4.15.1 (app v1.15.1). Restricted PSA (NET_BIND_SERVICE allowed). LB IP pinned to 10.4.200.10 inside METALLB_RANGE. Wildcard *.${CLUSTER_DOMAIN} default cert via cert-manager + atricore-ca, wired as controller.extraArgs.default-ssl-certificate so unmatched-SNI clients still get a valid TLS handshake. Snippets disabled (chart default; safer). Smoke is minimal (helm status + rollout status + LB IP allocation check) — no E2E request flow. cluster-up stays Phase-1; ingress is opt-in.</notes>\n<parameter name=\"companionFile\">cluster.ingress-nginx.md",
+      "version": 1,
+      "createdAt": "2026-05-07T18:04:06.881Z",
+      "updatedAt": "2026-05-07T18:15:46.417Z"
     }
   ]
 }

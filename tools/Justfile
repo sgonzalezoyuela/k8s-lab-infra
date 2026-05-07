@@ -154,3 +154,18 @@ newt-smoke: env-check
 [no-cd]
 newt-uninstall:
     "$TOOLS_DIR/cluster/newt/uninstall.sh"
+
+# Phase 2: install ingress-nginx with restricted PSA, pinned LB IP, wildcard default-ssl Cert (idempotent).
+[no-cd]
+ingress-install: env-check
+    "$TOOLS_DIR/cluster/ingress-nginx/install.sh"
+
+# Phase 2: assert the controller is rolled out and the pinned LB IP was actually allocated by MetalLB.
+[no-cd]
+ingress-smoke: env-check
+    "$TOOLS_DIR/cluster/ingress-nginx/smoke.sh"
+
+# Phase 2: remove the wildcard Certificate, the Secret, the Helm release, and the namespace.
+[no-cd]
+ingress-uninstall:
+    "$TOOLS_DIR/cluster/ingress-nginx/uninstall.sh"

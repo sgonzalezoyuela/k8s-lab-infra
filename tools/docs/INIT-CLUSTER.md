@@ -197,6 +197,9 @@ Talos patches, Helm values) is rendered from it.
 | `NEWT_ID` | Phase 2: site identifier issued by Pangolin's "create site" UI. Ships as the literal `REPLACE-ME-FROM-PANGOLIN-UI` so `env-check` passes; `newt-install` refuses to apply that placeholder. |
 | `NEWT_SECRET` | Phase 2: site secret issued by Pangolin's "create site" UI. Same placeholder semantics as `NEWT_ID`. **Never commit** — `.env` is gitignored. |
 | `NEWT_IMAGE_TAG` | Phase 2: pinned `fosrl/newt` container image tag (e.g. `1.12.3`). **No `v` prefix** — fosrl/newt tags are bare semver. The bundled default lives at `tools/cluster/newt/image-tag.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
+| `INGRESS_NGINX_CHART_VERSION` | Phase 2: pinned `kubernetes/ingress-nginx` Helm chart version (e.g. `4.15.1`). **No `v` prefix** (matches MetalLB, differs from cert-manager). The bundled default lives at `tools/cluster/ingress-nginx/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
+| `INGRESS_LB_IP` | Phase 2: LoadBalancer IP pinned to the ingress-nginx controller Service. **Must be inside `${METALLB_RANGE}`**; `ingress-install` fails fast otherwise. The recommended pattern is to reserve a stable IP near the bottom of the pool (e.g. `10.4.200.10`) and point your wildcard DNS at it. |
+| `INGRESS_DEFAULT_TLS_SECRET` | Phase 2: name of both the cert-manager `Certificate` and the resulting `Secret` in the `ingress-nginx` namespace. Default `ingress-default-tls`. Wired into the controller via `controller.extraArgs.default-ssl-certificate=ingress-nginx/$INGRESS_DEFAULT_TLS_SECRET` so unmatched-SNI clients still get a valid handshake against `*.${CLUSTER_DOMAIN}`. |
 
 ---
 
@@ -426,6 +429,172 @@ just cert-manager-uninstall
 
 Removes the ClusterIssuer, the CA Secret, the Helm release, and the
 `cert-manager` namespace. Safe to re-run when nothing is installed.
+
+---
+
+## Phase 2: ingress-nginx
+
+Phase 2 is **opt-in** and **not part of `just cluster-up`**. ingress-nginx is
+the L7 router for HTTP(S) traffic into the cluster: it terminates TLS, picks
+a backend `Service` based on the request's `Host` header (and path), and
+forwards the request. We pair it with cert-manager (for per-Ingress
+auto-issued certs) and MetalLB (for a real, pinned LoadBalancer IP), so this
+recipe **depends on both** of those Phase-2 features being installed first.
+
+The install pins one **wildcard `*.${CLUSTER_DOMAIN}` Certificate** issued by
+the `atricore-ca` ClusterIssuer and wires it into the controller as
+`controller.extraArgs.default-ssl-certificate`. Unmatched-SNI clients still
+get a valid TLS handshake (instead of the dummy "Kubernetes Ingress
+Controller Fake Certificate" served by stock ingress-nginx). Per-Ingress
+certs are still auto-issued via the standard `cert-manager.io/cluster-issuer`
+annotation flow described below.
+
+### Prerequisites
+
+- A working cluster (`just cluster-up` finished and `kubectl get nodes` is
+  green).
+- `KUBECONFIG` exported (the cluster `nix develop` shell does this; if you
+  bypassed it, run `just kubeconfig`).
+- **`just metallb-install`** has run successfully and the speaker is Ready
+  (controller needs a real LoadBalancer IP allocated by MetalLB).
+- **`just cert-manager-install`** has run successfully and the
+  `${CLUSTER_ISSUER_NAME}` ClusterIssuer reports `Ready=True` (controller
+  needs the wildcard default-ssl Certificate to come up).
+- `.env` contains `INGRESS_NGINX_CHART_VERSION`, `INGRESS_LB_IP` (must be
+  inside `METALLB_RANGE`), and `INGRESS_DEFAULT_TLS_SECRET`.
+
+### Install
+
+```bash
+just ingress-install
+```
+
+The recipe:
+
+1. Validates that `INGRESS_LB_IP` parses as an IPv4 address and falls inside
+   `METALLB_RANGE` (same `ip_to_int` + bitmask arithmetic as MetalLB's
+   pre-validate). Aborts with a clear error otherwise.
+2. Server-side-applies the `ingress-nginx` namespace with
+   `pod-security.kubernetes.io/enforce: restricted`. The controller is
+   fully restricted-PSA-compliant: runs as uid 101, all caps dropped, only
+   `NET_BIND_SERVICE` re-added (the one cap restricted PSA still permits,
+   which is exactly what nginx needs to bind 80/443).
+3. `helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx` in
+   that namespace, with the pinned chart version and `helm-values.yaml`,
+   plus two `--set` values from `.env`:
+   `controller.service.loadBalancerIP=$INGRESS_LB_IP` and
+   `controller.extraArgs.default-ssl-certificate=ingress-nginx/$INGRESS_DEFAULT_TLS_SECRET`.
+   `--wait` blocks until the controller Deployment is rolled out.
+4. Server-side-applies the wildcard `Certificate/${INGRESS_DEFAULT_TLS_SECRET}`
+   rendered from `default-ssl-cert.yaml.tpl` (covers both `*.${CLUSTER_DOMAIN}`
+   and the apex `${CLUSTER_DOMAIN}`).
+5. Waits ≤60s for that Certificate to report `Ready=True`.
+
+The recipe is idempotent: re-running it leaves the Helm release at the same
+revision and reports "unchanged" for both the namespace and the Certificate.
+
+### Verify
+
+```bash
+kubectl -n ingress-nginx get svc ingress-nginx-controller
+# NAME                       TYPE           CLUSTER-IP      EXTERNAL-IP    PORT(S)                      AGE
+# ingress-nginx-controller   LoadBalancer   10.x.x.x        10.4.200.10    80:.../TCP,443:.../TCP       1m
+kubectl -n ingress-nginx get pods                                  # controller Running
+kubectl -n ingress-nginx get certificate ${INGRESS_DEFAULT_TLS_SECRET}   # READY=True
+```
+
+### Smoke
+
+```bash
+just ingress-smoke
+```
+
+This runs `helm -n ingress-nginx status ingress-nginx`, then
+`kubectl rollout status deployment/ingress-nginx-controller --timeout=60s`,
+then asserts `Service.status.loadBalancer.ingress[0].ip` is **exactly**
+`${INGRESS_LB_IP}`. The third assertion catches the silent failure where
+MetalLB couldn't allocate the pinned IP (because something else in the pool
+is squatting it) and silently fell back to the next free IP — at which
+point your wildcard DNS still points at `${INGRESS_LB_IP}` and nothing works.
+
+### Uninstall
+
+```bash
+just ingress-uninstall
+```
+
+Removes the wildcard Certificate, its Secret, the Helm release, and the
+`ingress-nginx` namespace. Safe to re-run when nothing is installed.
+
+### DNS and host-route guidance
+
+For services exposed via Ingress to be reachable, two operator-side hops
+are needed (neither is automated by this stack):
+
+1. **DNS.** Point your A/AAAA records at `INGRESS_LB_IP`. The recommended
+   shape is a wildcard record so adding new app hostnames doesn't require
+   DNS edits:
+
+   ```text
+   *.k8s4.lab.atricore.io.   IN  A   10.4.200.10
+   ```
+
+   Or per-app:
+
+   ```text
+   app1.k8s4.lab.atricore.io. IN A   10.4.200.10
+   ```
+
+2. **Host route from your workstation.** Same as for MetalLB — your
+   workstation needs to know how to reach `${METALLB_RANGE}`:
+
+   ```bash
+   sudo ip route add ${METALLB_RANGE} via ${CP_IP}
+   ```
+
+   The cluster `nix develop` shell prints this reminder on entry.
+
+### Adding an app Ingress (cert-manager auto-issued cert)
+
+The wildcard default-ssl Certificate handles the unmatched-SNI case, but
+production-quality apps should declare their own `Ingress` with an
+auto-issued per-host certificate. Annotate with
+`cert-manager.io/cluster-issuer: ${CLUSTER_ISSUER_NAME}` and cert-manager's
+ingress-shim watches the resource, creates the matching `Certificate`, and
+lands the cert in the named `Secret`. ingress-nginx then loads it for SNI
+matching the listed hosts.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app
+  namespace: my-app
+  annotations:
+    cert-manager.io/cluster-issuer: atricore-ca
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [my-app.k8s4.lab.atricore.io]
+      secretName: my-app-tls
+  rules:
+    - host: my-app.k8s4.lab.atricore.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: my-app
+                port:
+                  number: 80
+```
+
+If you skip the per-host `tls:` block entirely, the controller will fall
+back to the wildcard default-ssl Certificate and you still get a valid
+handshake — but with the wildcard's `commonName` rather than the host's.
+For internal/throwaway services this is often good enough; for anything
+user-facing, prefer the per-Ingress flow above.
 
 ---
 

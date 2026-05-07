@@ -27,7 +27,15 @@ controller:
   # Restricted Pod Security Admission compliance. The controller pod runs
   # as non-root (uid 101 == upstream nginx user), all caps dropped, with
   # the single NET_BIND_SERVICE cap re-added so it can listen on 80/443.
-  # This is exactly the set "restricted" PSA still permits.
+  # That set is exactly what the "restricted" PSS profile permits.
+  #
+  # Note: readOnlyRootFilesystem is intentionally LEFT OFF (chart default
+  # is false). nginx-ingress writes to /etc/ingress-controller/ssl/,
+  # /etc/nginx/lua/, and /tmp/nginx/ during normal operation; making the
+  # rootfs read-only requires a constellation of emptyDir mounts that the
+  # ingress-nginx maintainers explicitly recommend against. Crucially,
+  # readOnlyRootFilesystem is NOT part of the PSS "restricted" profile —
+  # the namespace stays restricted-compliant either way.
   podSecurityContext:
     runAsNonRoot: true
     seccompProfile:
@@ -36,7 +44,6 @@ controller:
     runAsNonRoot: true
     runAsUser: 101
     allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: true
     capabilities:
       drop:
         - ALL

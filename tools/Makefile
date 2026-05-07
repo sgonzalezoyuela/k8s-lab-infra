@@ -966,8 +966,9 @@ test-cluster.ingress-nginx:
 		  || { echo "    [FAIL] helm-values.yaml missing allowSnippetAnnotations: false (CVE foothold; must be explicit)" >&2 ; exit 1 ; } ; \
 		grep -q "runAsNonRoot: true" "$$ASSETS/helm-values.yaml" \
 		  || { echo "    [FAIL] helm-values.yaml missing runAsNonRoot: true" >&2 ; exit 1 ; } ; \
-		grep -q "readOnlyRootFilesystem: true" "$$ASSETS/helm-values.yaml" \
-		  || { echo "    [FAIL] helm-values.yaml missing readOnlyRootFilesystem: true" >&2 ; exit 1 ; } ; \
+		if grep -q "readOnlyRootFilesystem: true" "$$ASSETS/helm-values.yaml" ; then \
+		  echo "    [FAIL] helm-values.yaml must NOT set readOnlyRootFilesystem: true — ingress-nginx writes to /etc/ingress-controller/ssl/, /etc/nginx/lua/, /tmp/nginx/ during normal operation; chart default (false) is the maintained-supported configuration. PSS restricted does not require it." >&2 ; exit 1 ; \
+		fi ; \
 		grep -q "NET_BIND_SERVICE" "$$ASSETS/helm-values.yaml" \
 		  || { echo "    [FAIL] helm-values.yaml missing NET_BIND_SERVICE capability" >&2 ; exit 1 ; } ; \
 		grep -qE "defaultBackend:" "$$ASSETS/helm-values.yaml" \

@@ -43,6 +43,7 @@ test: test-talos.bootstrap-cluster
 test: test-talos.nocloud-proxmox-cloudinit
 test: test-cluster.cert-manager
 test: test-cluster.metallb
+test: test-cluster.newt
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -106,7 +107,8 @@ test-bootstrap.config-scheme:
 		          WK_CORES WK_MEMORY_MB WK_DISK_SIZE_GB WK_STORAGE_DISK_SIZE_GB \
 		          TALOS_IMAGE_PLATFORM METALLB_RANGE METALLB_CHART_VERSION \
 		          CA_CERT_PATH CA_KEY_PATH \
-		          CLUSTER_ISSUER_NAME CERT_MANAGER_CHART_VERSION" ; \
+		          CLUSTER_ISSUER_NAME CERT_MANAGER_CHART_VERSION \
+		          PANGOLIN_ENDPOINT NEWT_ID NEWT_SECRET NEWT_IMAGE_TAG" ; \
 		test -f "$(TOOLS_DIR)/.env.example" \
 		  || { echo "    [FAIL] tools/.env.example missing" >&2 ; exit 1 ; } ; \
 		for k in $$required ; do \
@@ -149,6 +151,8 @@ test-bootstrap.config-scheme:
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp/.env.example" ; \
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp/.env" ; \
 		sed -i "s|^PROXMOX_API_TOKEN_SECRET=.*|PROXMOX_API_TOKEN_SECRET=fake-uuid-12345|" "$$tmp/.env" ; \
+		sed -i "s|^NEWT_ID=.*|NEWT_ID=fake-id|"                                         "$$tmp/.env" ; \
+		sed -i "s|^NEWT_SECRET=.*|NEWT_SECRET=fake-secret|"                             "$$tmp/.env" ; \
 		mkdir -p "$$tmp/tools" ; \
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp/tools/.env.example" ; \
 		cp "$(TOOLS_DIR)/Justfile" "$$tmp/Justfile" ; \
@@ -163,6 +167,8 @@ test-bootstrap.config-scheme:
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp2/.env.example" ; \
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp2/.env" ; \
 		sed -i "s|^PROXMOX_API_TOKEN_SECRET=.*|PROXMOX_API_TOKEN_SECRET=fake|" "$$tmp2/.env" ; \
+		sed -i "s|^NEWT_ID=.*|NEWT_ID=fake-id|"                               "$$tmp2/.env" ; \
+		sed -i "s|^NEWT_SECRET=.*|NEWT_SECRET=fake-secret|"                   "$$tmp2/.env" ; \
 		mkdir -p "$$tmp2/tools" ; \
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp2/tools/.env.example" ; \
 		cp "$(TOOLS_DIR)/Justfile" "$$tmp2/Justfile" ; \
@@ -293,6 +299,8 @@ test-infra.opentofu.proxmox-vms:
 		cp "$(TOOLS_DIR)/.env.example"             "$$tmp/.env" ; \
 		cp "$(TOOLS_DIR)/.env.example"             "$$tmp/tools/.env.example" ; \
 		sed -i "s|^PROXMOX_API_TOKEN_SECRET=.*|PROXMOX_API_TOKEN_SECRET=fake|" "$$tmp/.env" ; \
+		sed -i "s|^NEWT_ID=.*|NEWT_ID=fake-id|"                               "$$tmp/.env" ; \
+		sed -i "s|^NEWT_SECRET=.*|NEWT_SECRET=fake-secret|"                   "$$tmp/.env" ; \
 		echo "TALOS_VERSION=v1.13.0" >> "$$tmp/.env" ; \
 		echo "deadbeefcafef00d1234" > "$$tmp/_out/talos-schematic-id" ; \
 		cp "$(TOOLS_DIR)/talos/scripts/render-tfvars.sh"            "$$tmp/tools/talos/scripts/" ; \
@@ -368,6 +376,8 @@ test-talos.machine-configs:
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp/.env.example" ; \
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp/.env" ; \
 		sed -i "s|^PROXMOX_API_TOKEN_SECRET=.*|PROXMOX_API_TOKEN_SECRET=fake|" "$$tmp/.env" ; \
+		sed -i "s|^NEWT_ID=.*|NEWT_ID=fake-id|"                               "$$tmp/.env" ; \
+		sed -i "s|^NEWT_SECRET=.*|NEWT_SECRET=fake-secret|"                   "$$tmp/.env" ; \
 		echo "TALOS_VERSION=v1.13.0" >> "$$tmp/.env" ; \
 		( cd "$$tmp" && TOOLS_DIR="$$tmp/tools" just talos-config >/dev/null 2>&1 ) \
 		  || { echo "    [FAIL] just talos-config failed" >&2 ; exit 1 ; } ; \
@@ -742,3 +752,134 @@ test-cluster.metallb:
 		  || { echo "    [FAIL] README.md does not reference just metallb-install" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] cluster.metallb"
+
+# ---------------------------------------------------------------------------
+# cluster.newt
+# ---------------------------------------------------------------------------
+# Offline structural verification of the Phase-2 newt (Pangolin tunnel client)
+# assets:
+#   - all seven tools/cluster/newt/* files exist; the *.sh are executable and
+#     start with the "$${TOOLS_DIR:?...}" preamble.
+#   - install.sh references kubectl apply --server-side, envsubst, the
+#     rollout wait, all four env keys, the http(s) URL regex, and the
+#     REPLACE-ME placeholder check.
+#   - namespace.yaml declares name: newt + restricted PSA enforce label.
+#   - secret.yaml.tpl is kind: Secret named newt-credentials in ns newt with
+#     all three placeholders.
+#   - deployment.yaml.tpl is kind: Deployment named newt in ns newt with
+#     Recreate strategy, the pinned image template, envFrom secretRef
+#     newt-credentials, runAsNonRoot/readOnlyRootFilesystem, capabilities
+#     drop ALL, and containerPort 2112.
+#   - smoke.sh references rollout status and the literal "Connecting to
+#     endpoint:" log line.
+#   - image-tag.txt matches ^[0-9]+\.[0-9]+\.[0-9]+$ (NO `v` prefix; matches
+#     fosrl/newt's container tag style; consistent with metallb).
+#   - tools/.env.example carries the four env keys (PANGOLIN_ENDPOINT
+#     non-empty, NEWT_ID/NEWT_SECRET empty for init-config to prompt,
+#     NEWT_IMAGE_TAG=<bare semver>).
+#   - tools/Justfile has the three [no-cd] recipes.
+#   - INIT-CLUSTER.md mentions newt-install and Pangolin.
+#   - top-level README.md references just newt-install.
+.PHONY: test-cluster.newt
+test-cluster.newt:
+	@echo "==> cluster.newt"
+	@$(NIX_DEV) bash -c '\
+		set -eu ; \
+		export TOOLS_DIR="$(TOOLS_DIR)" ; \
+		ASSETS="$(TOOLS_DIR)/cluster/newt" ; \
+		for f in install.sh uninstall.sh smoke.sh ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		  test -x "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f not executable" >&2 ; exit 1 ; } ; \
+		  head -1 "$$ASSETS/$$f" | grep -q "^#!/usr/bin/env bash" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing bash shebang on line 1" >&2 ; exit 1 ; } ; \
+		  head -5 "$$ASSETS/$$f" | grep -qE "\\\$$\\{TOOLS_DIR:\\?" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing TOOLS_DIR preamble in first 5 lines" >&2 ; exit 1 ; } ; \
+		done ; \
+		for f in namespace.yaml secret.yaml.tpl deployment.yaml.tpl image-tag.txt ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "kubectl apply --server-side" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing kubectl apply --server-side" >&2 ; exit 1 ; } ; \
+		grep -q "envsubst" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing envsubst" >&2 ; exit 1 ; } ; \
+		grep -q "rollout status deployment/newt" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing rollout status deployment/newt" >&2 ; exit 1 ; } ; \
+		for v in PANGOLIN_ENDPOINT NEWT_ID NEWT_SECRET NEWT_IMAGE_TAG ; do \
+		  grep -q "$$v" "$$ASSETS/install.sh" \
+		    || { echo "    [FAIL] install.sh does not reference $$v" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -qE "https\\?://" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing http(s):// URL regex check on PANGOLIN_ENDPOINT" >&2 ; exit 1 ; } ; \
+		grep -q "REPLACE-ME-FROM-PANGOLIN-UI" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing REPLACE-ME-FROM-PANGOLIN-UI placeholder check" >&2 ; exit 1 ; } ; \
+		grep -qE "kind:[[:space:]]*Namespace" "$$ASSETS/namespace.yaml" \
+		  || { echo "    [FAIL] namespace.yaml missing kind: Namespace" >&2 ; exit 1 ; } ; \
+		grep -qE "name:[[:space:]]*newt" "$$ASSETS/namespace.yaml" \
+		  || { echo "    [FAIL] namespace.yaml missing name: newt" >&2 ; exit 1 ; } ; \
+		grep -q "pod-security.kubernetes.io/enforce: restricted" "$$ASSETS/namespace.yaml" \
+		  || { echo "    [FAIL] namespace.yaml missing pod-security.kubernetes.io/enforce: restricted" >&2 ; exit 1 ; } ; \
+		grep -qE "kind:[[:space:]]*Secret" "$$ASSETS/secret.yaml.tpl" \
+		  || { echo "    [FAIL] secret.yaml.tpl missing kind: Secret" >&2 ; exit 1 ; } ; \
+		grep -qE "name:[[:space:]]*newt-credentials" "$$ASSETS/secret.yaml.tpl" \
+		  || { echo "    [FAIL] secret.yaml.tpl missing name: newt-credentials" >&2 ; exit 1 ; } ; \
+		grep -qE "namespace:[[:space:]]*newt" "$$ASSETS/secret.yaml.tpl" \
+		  || { echo "    [FAIL] secret.yaml.tpl missing namespace: newt" >&2 ; exit 1 ; } ; \
+		for ph in PANGOLIN_ENDPOINT NEWT_ID NEWT_SECRET ; do \
+		  grep -qE "\\\$$\\{$$ph\\}" "$$ASSETS/secret.yaml.tpl" \
+		    || { echo "    [FAIL] secret.yaml.tpl missing \\\$${$$ph} placeholder" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -qE "kind:[[:space:]]*Deployment" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing kind: Deployment" >&2 ; exit 1 ; } ; \
+		grep -qE "name:[[:space:]]*newt$$" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing name: newt" >&2 ; exit 1 ; } ; \
+		grep -qE "namespace:[[:space:]]*newt" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing namespace: newt" >&2 ; exit 1 ; } ; \
+		grep -qE "type:[[:space:]]*Recreate" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing strategy.type: Recreate (one Pangolin WS connection per site; RollingUpdate would race)" >&2 ; exit 1 ; } ; \
+		grep -qE "image:[[:space:]]*fosrl/newt:\\\$$\\{NEWT_IMAGE_TAG\\}" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing image: fosrl/newt:\\\$${NEWT_IMAGE_TAG}" >&2 ; exit 1 ; } ; \
+		grep -q "envFrom:" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing envFrom" >&2 ; exit 1 ; } ; \
+		grep -qE "name:[[:space:]]*newt-credentials" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing secretRef name: newt-credentials" >&2 ; exit 1 ; } ; \
+		grep -q "runAsNonRoot: true" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing runAsNonRoot: true" >&2 ; exit 1 ; } ; \
+		grep -q "readOnlyRootFilesystem: true" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing readOnlyRootFilesystem: true" >&2 ; exit 1 ; } ; \
+		grep -A1 -E "drop:[[:space:]]*$$" "$$ASSETS/deployment.yaml.tpl" | grep -qE -- "-[[:space:]]*ALL" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing capabilities.drop: [ALL]" >&2 ; exit 1 ; } ; \
+		grep -q "containerPort: 2112" "$$ASSETS/deployment.yaml.tpl" \
+		  || { echo "    [FAIL] deployment.yaml.tpl missing containerPort: 2112 (newt metrics)" >&2 ; exit 1 ; } ; \
+		grep -q "rollout status deployment/newt" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing rollout status deployment/newt" >&2 ; exit 1 ; } ; \
+		grep -q "Connecting to endpoint:" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing literal \"Connecting to endpoint:\" log probe" >&2 ; exit 1 ; } ; \
+		ver=$$(tr -d "[:space:]" < "$$ASSETS/image-tag.txt") ; \
+		echo "$$ver" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$$" \
+		  || { echo "    [FAIL] image-tag.txt does not match ^[0-9]+\\.[0-9]+\\.[0-9]+\$$ (got: $$ver; note: NO v prefix, fosrl/newt tags are bare semver)" >&2 ; exit 1 ; } ; \
+		grep -qE "^PANGOLIN_ENDPOINT=" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing PANGOLIN_ENDPOINT" >&2 ; exit 1 ; } ; \
+		grep -qE "^NEWT_ID=" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing NEWT_ID" >&2 ; exit 1 ; } ; \
+		grep -qE "^NEWT_SECRET=" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing NEWT_SECRET" >&2 ; exit 1 ; } ; \
+		grep -qE "^NEWT_IMAGE_TAG=[0-9]+\.[0-9]+\.[0-9]+" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing NEWT_IMAGE_TAG=<bare semver>" >&2 ; exit 1 ; } ; \
+		for r in newt-install newt-smoke newt-uninstall ; do \
+		  grep -qE "^$${r}:" "$(TOOLS_DIR)/Justfile" \
+		    || { echo "    [FAIL] Justfile lacks recipe: $$r" >&2 ; exit 1 ; } ; \
+		  prev_line=$$(grep -B1 "^$${r}:" "$(TOOLS_DIR)/Justfile" | head -1) ; \
+		  echo "$$prev_line" | grep -qE "^\[no-cd\]" \
+		    || { echo "    [FAIL] Justfile recipe $$r missing [no-cd] attribute on the line above" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "newt-install" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing newt-install recipe reference" >&2 ; exit 1 ; } ; \
+		grep -qi "pangolin" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing Pangolin coverage" >&2 ; exit 1 ; } ; \
+		grep -q "just newt-install" "$(REPO_ROOT)/README.md" \
+		  || { echo "    [FAIL] README.md does not reference just newt-install" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] cluster.newt"

@@ -21,7 +21,7 @@ init-config:
       cp "$TOOLS_DIR/.env.example" .env
       echo "Created .env from $TOOLS_DIR/.env.example"
     fi
-    for var in PROXMOX_API_TOKEN_SECRET; do
+    for var in PROXMOX_API_TOKEN_SECRET NEWT_ID NEWT_SECRET; do
       current=$(grep -E "^${var}=" .env | cut -d= -f2-)
       if [ -z "$current" ]; then
         read -r -s -p "Value for $var: " val; echo
@@ -139,3 +139,18 @@ metallb-smoke: env-check
 [no-cd]
 metallb-uninstall:
     "$TOOLS_DIR/cluster/metallb/uninstall.sh"
+
+# Phase 2: install newt (Pangolin tunnel client; userspace WireGuard, egress-only). Idempotent.
+[no-cd]
+newt-install: env-check
+    "$TOOLS_DIR/cluster/newt/install.sh"
+
+# Phase 2: assert the newt Deployment is rolled out and reached the "Connecting to endpoint:" log line.
+[no-cd]
+newt-smoke: env-check
+    "$TOOLS_DIR/cluster/newt/smoke.sh"
+
+# Phase 2: remove the newt Deployment, the credentials Secret, and the namespace.
+[no-cd]
+newt-uninstall:
+    "$TOOLS_DIR/cluster/newt/uninstall.sh"

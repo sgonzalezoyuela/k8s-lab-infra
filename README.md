@@ -40,6 +40,14 @@ just metallb-smoke
 # Requires secrets/ca.crt + secrets/ca.key.
 just cert-manager-install
 just cert-manager-smoke
+
+# newt (Pangolin tunnel client) — independent of metallb/cert-manager and
+# NOT part of `just cluster-up`. Before running, edit .env to replace
+# NEWT_ID=REPLACE-ME-FROM-PANGOLIN-UI and NEWT_SECRET=REPLACE-ME-FROM-PANGOLIN-UI
+# with the real values shown in your Pangolin site UI; install.sh refuses
+# placeholders.
+just newt-install
+just newt-smoke
 ```
 
 The cluster's `nix develop` shell exports:

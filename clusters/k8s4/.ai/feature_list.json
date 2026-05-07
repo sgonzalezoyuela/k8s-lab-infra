@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-07T14:56:54.631Z",
-    "version": 33,
+    "updatedAt": "2026-05-07T16:17:24.094Z",
+    "version": 36,
     "tddMode": "recommended"
   },
   "features": [
@@ -261,6 +261,39 @@
       "companionFile": "cluster.metallb-l2.md",
       "createdAt": "2026-05-07T14:47:13.562Z",
       "updatedAt": "2026-05-07T14:56:54.631Z"
+    },
+    {
+      "id": "cluster.newt-pangolin-client",
+      "description": "Deploy fosrl/newt as a Pangolin tunnel client (userspace WireGuard, egress-only) with credentials from .env, pinned image, restricted PSA, and Recreate update strategy.",
+      "module": "cluster",
+      "priority": 11,
+      "status": "implemented",
+      "acceptance": [
+        "`tools/cluster/newt/{install.sh,uninstall.sh,smoke.sh,namespace.yaml,secret.yaml.tpl,deployment.yaml.tpl,image-tag.txt}` all exist; `*.sh` are executable and start with the `${TOOLS_DIR:?...}` preamble.",
+        "`tools/.env.example` declares `PANGOLIN_ENDPOINT`, `NEWT_ID`, `NEWT_SECRET`, and `NEWT_IMAGE_TAG=<pinned>` (matches `image-tag.txt`). The bootstrap.config-scheme test required-vars list is extended with all four.",
+        "`tools/Justfile` exposes three `[no-cd]` recipes: `newt-install`, `newt-smoke`, `newt-uninstall`. Install and smoke depend on `env-check`.",
+        "`install.sh` validates that `PANGOLIN_ENDPOINT` looks like an http(s) URL; applies the namespace, then envsubsts and applies the Secret and Deployment server-side; finishes with `kubectl rollout status deployment/newt -n newt --timeout=2m`.",
+        "`secret.yaml.tpl` declares `kind: Secret`, `metadata.name: newt-credentials`, `metadata.namespace: newt`, with `stringData` keys `PANGOLIN_ENDPOINT`, `NEWT_ID`, `NEWT_SECRET` rendered from env.",
+        "`deployment.yaml.tpl` declares `kind: Deployment`, `metadata.name: newt`, `metadata.namespace: newt`, `spec.strategy.type: Recreate`, container image `fosrl/newt:${NEWT_IMAGE_TAG}`, `envFrom` referencing the `newt-credentials` Secret, securityContext with `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, `capabilities.drop: [ALL]`, and exposes container port 2112 (metrics).",
+        "`namespace.yaml` declares `kind: Namespace`, `metadata.name: newt`, with `pod-security.kubernetes.io/enforce: restricted` (newt is fully userspace; no privileges needed).",
+        "Re-running `just newt-install` is a no-op: `kubectl apply --server-side` reports unchanged for namespace, Secret, and Deployment.",
+        "`just newt-uninstall` removes the Deployment, the Secret, the namespace, and is safe to run when nothing is installed (no errors on missing resources).",
+        "`just newt-smoke` runs `kubectl rollout status` against the Deployment with a 60s timeout, then polls pod logs for the literal substring `Connecting to endpoint:` for up to 30s; on timeout it prints the last 30 log lines plus diagnostic hints and exits 1.",
+        "`tools/Makefile` has a new `test-cluster.newt` target wired into the top-level `test:` aggregator. Offline assertions: file presence + executable + preamble; install.sh references `kubectl apply --server-side`, `envsubst`, `rollout status`, `PANGOLIN_ENDPOINT`, `NEWT_ID`, `NEWT_SECRET`, `NEWT_IMAGE_TAG`; secret.yaml.tpl has the right kind/name/namespace and three placeholders; deployment.yaml.tpl has Recreate strategy, the image template, the secretRef, runAsNonRoot, readOnlyRootFilesystem; namespace.yaml has the restricted PSA label; smoke.sh references rollout status and the literal `Connecting to endpoint:` string; image-tag.txt matches `^[0-9]+\\.[0-9]+\\.[0-9]+$`; .env.example has the four env keys; Justfile has the three recipes each preceded by `[no-cd]`.",
+        "`tools/docs/INIT-CLUSTER.md` Phase 2 section gains a 'newt (Pangolin tunnel client)' subsection covering prerequisites (kubeconfig, Pangolin server reachable, NEWT_ID/SECRET in .env), the three recipes, and the security model (restricted PSA, no node privileges, Recreate strategy).",
+        "`README.md` (top-level) references `just newt-install` as a Phase 2 step in the per-cluster workflow; clarifies it is independent of MetalLB and cert-manager and is NOT part of `cluster-up`.",
+        "`clusters/k8s4/.env` is updated with non-empty values so `env-check` continues to pass: `PANGOLIN_ENDPOINT=https://app.pangolin.net`, `NEWT_ID=REPLACE-ME-FROM-PANGOLIN-UI`, `NEWT_SECRET=REPLACE-ME-FROM-PANGOLIN-UI`, `NEWT_IMAGE_TAG=1.12.3`. The companion file and INIT-CLUSTER.md document that the REPLACE-ME placeholders MUST be replaced with real values from Pangolin's site-creation UI before running `just newt-install`.",
+        "All existing structural tests still pass when run as `npm test` from `clusters/k8s4/` (which runs the tools structural tests + the cluster smoke). The new `test-cluster.newt` is part of that run."
+      ],
+      "dependsOn": [
+        "talos.bootstrap-cluster",
+        "bootstrap.split-tools-and-clusters"
+      ],
+      "notes": "Pinned newt 1.12.3 (April 2026 release). No Helm chart. Plain manifests via envsubst + kubectl apply --server-side. Userspace WireGuard via wireguard-go netstack — restricted PSA, no privileges. Egress-only (HTTPS+WSS to Pangolin). Recreate strategy avoids overlapping WebSocket connections during rolls. Smoke greps for 'Connecting to endpoint:' which only logs after successful auth + WebSocket + wg/connect message from Pangolin. Credentials stored in .env (NEWT_ID/NEWT_SECRET); install.sh creates a Secret server-side. cluster-up stays Phase-1; newt is opt-in.",
+      "version": 1,
+      "companionFile": "cluster.newt-pangolin-client.md",
+      "createdAt": "2026-05-07T16:05:50.797Z",
+      "updatedAt": "2026-05-07T16:17:24.094Z"
     }
   ]
 }

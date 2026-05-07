@@ -193,6 +193,10 @@ Talos patches, Helm values) is rendered from it.
 | `CA_CERT_PATH` / `CA_KEY_PATH` | Phase 2: paths under `secrets/` for cert-manager `ClusterIssuer` |
 | `CLUSTER_ISSUER_NAME` | Phase 2: name of the cert-manager `ClusterIssuer` and its backing TLS Secret in the `cert-manager` namespace (default `atricore-ca`) |
 | `CERT_MANAGER_CHART_VERSION` | Phase 2: pinned Jetstack cert-manager Helm chart version (e.g. `v1.16.2`). The bundled default lives at `tools/cluster/cert-manager/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
+| `PANGOLIN_ENDPOINT` | Phase 2: full HTTPS URL of your Pangolin server (e.g. `https://app.pangolin.net`). `newt-install` validates the `http(s)://` prefix and fails fast otherwise. |
+| `NEWT_ID` | Phase 2: site identifier issued by Pangolin's "create site" UI. Ships as the literal `REPLACE-ME-FROM-PANGOLIN-UI` so `env-check` passes; `newt-install` refuses to apply that placeholder. |
+| `NEWT_SECRET` | Phase 2: site secret issued by Pangolin's "create site" UI. Same placeholder semantics as `NEWT_ID`. **Never commit** — `.env` is gitignored. |
+| `NEWT_IMAGE_TAG` | Phase 2: pinned `fosrl/newt` container image tag (e.g. `1.12.3`). **No `v` prefix** — fosrl/newt tags are bare semver. The bundled default lives at `tools/cluster/newt/image-tag.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 
 ---
 
@@ -422,6 +426,127 @@ just cert-manager-uninstall
 
 Removes the ClusterIssuer, the CA Secret, the Helm release, and the
 `cert-manager` namespace. Safe to re-run when nothing is installed.
+
+---
+
+## Phase 2: newt (Pangolin tunnel client)
+
+Phase 2 is **opt-in** and **not part of `just cluster-up`**. This step is
+also independent of MetalLB and cert-manager — none of those three Phase-2
+recipes depend on each other.
+
+[newt](https://github.com/fosrl/newt) is the userspace client side of
+[Pangolin](https://github.com/fosrl/pangolin), a self-hosted reverse proxy
+/ tunnel server. The cluster runs **one** newt pod that connects **outbound
+only** to your Pangolin server over HTTPS+WSS, then carries traffic over a
+userspace WireGuard tunnel (`wireguard-go` netstack — no kernel module, no
+`NET_ADMIN`, no host network). Pangolin terminates inbound traffic on the
+public side; nothing inbound reaches the cluster from this stack.
+
+### Prerequisites
+
+- A working cluster (`just cluster-up` finished and `kubectl get nodes` is
+  green).
+- `KUBECONFIG` exported (the cluster `nix develop` shell does this; if you
+  bypassed it, run `just kubeconfig`).
+- A reachable Pangolin server. The cluster pods must be able to resolve
+  `${PANGOLIN_ENDPOINT}` and reach it over HTTPS/WSS (egress firewall + DNS).
+- A `NEWT_ID` and `NEWT_SECRET` issued by your Pangolin server's site UI
+  ("create site" → copy the credentials).
+- `.env` contains `PANGOLIN_ENDPOINT`, `NEWT_ID`, `NEWT_SECRET`, and
+  `NEWT_IMAGE_TAG`. **Replace the `REPLACE-ME-FROM-PANGOLIN-UI` placeholders
+  with the real values before running `newt-install`.** `env-check` passes
+  with the placeholders (they're non-empty), but `install.sh` detects them
+  and refuses to apply.
+
+### Install
+
+```bash
+just newt-install
+```
+
+The recipe:
+
+1. Validates that `PANGOLIN_ENDPOINT` starts with `http://` or `https://`.
+2. Refuses to proceed if `NEWT_ID` or `NEWT_SECRET` is still the literal
+   `REPLACE-ME-FROM-PANGOLIN-UI` placeholder.
+3. Server-side-applies the `newt` namespace with `pod-security.kubernetes.io/enforce: restricted`.
+4. Renders `secret.yaml.tpl` via `envsubst` and server-side-applies a
+   `Secret/newt-credentials` carrying the three credential values.
+5. Renders `deployment.yaml.tpl` via `envsubst` and server-side-applies a
+   single-replica `Deployment/newt` with `strategy.type: Recreate`,
+   `image: fosrl/newt:${NEWT_IMAGE_TAG}`, `envFrom: secretRef: newt-credentials`,
+   and a hardened `securityContext` (`runAsNonRoot`, `readOnlyRootFilesystem`,
+   `capabilities.drop: [ALL]`, seccomp `RuntimeDefault`).
+6. Waits ≤2 min for `kubectl rollout status deployment/newt`.
+
+The recipe is idempotent: re-running it reports "unchanged" for namespace,
+Secret, and Deployment when nothing in `.env` changed.
+
+### Verify
+
+```bash
+kubectl -n newt get pods                                  # newt pod Ready
+kubectl -n newt logs deploy/newt | grep "Connecting to endpoint"
+```
+
+### Smoke
+
+```bash
+just newt-smoke
+```
+
+This re-runs `kubectl rollout status` with a 60s budget, then polls the pod
+logs for the literal `Connecting to endpoint:` line for ≤30s. That line is
+emitted by newt **only after** HTTPS auth succeeded, the WebSocket
+upgraded, and Pangolin pushed back the `wg/connect` message — i.e. the
+tunnel is genuinely being brought up, not just the container started. On
+timeout the recipe prints the last 30 log lines plus diagnostic hints
+(credentials, reachability, single-connection-per-site) and exits 1.
+
+### Uninstall
+
+```bash
+just newt-uninstall
+```
+
+Removes the Deployment, the Secret, and the `newt` namespace. Safe to
+re-run on an empty cluster (`--ignore-not-found` on every step).
+
+### Security model
+
+- **Restricted PSA.** The `newt` namespace has
+  `pod-security.kubernetes.io/enforce: restricted`. Possible because newt
+  is fully userspace — `wireguard-go` (the netstack tunnel) does not need
+  `NET_ADMIN`, host network, or `/dev/net/tun`. The pod runs as non-root
+  (uid 65532), with a read-only root filesystem, all capabilities dropped,
+  and the `RuntimeDefault` seccomp profile.
+- **Egress only.** No `Service`, no `Ingress`, no inbound port. Pangolin
+  is reached over HTTPS (auth) + WSS (control plane) + the userspace
+  WireGuard data path. Inbound traffic to your services arrives only via
+  Pangolin's public side; this stack does not expose anything to the local
+  cluster network.
+- **One connection per site.** A Pangolin site only accepts a single
+  concurrent newt connection. The Deployment uses `strategy.type:
+  Recreate` (not `RollingUpdate`) so during a roll the old pod is
+  terminated *before* the new one starts. RollingUpdate would briefly run
+  two pods racing for the WebSocket and produce flapping.
+
+### Rotation
+
+To rotate `NEWT_SECRET` (e.g. after suspected leak):
+
+1. Issue a new secret from the Pangolin site UI.
+2. Edit `.env`, replace `NEWT_SECRET=` with the new value.
+3. `just newt-install`. The Secret server-side-apply produces a new
+   `resourceVersion`, the Deployment template's `envFrom` re-reads it on
+   the next pod start, and the `Recreate` strategy guarantees the old pod
+   stops before the new one starts (so the new pod authenticates with the
+   new secret without overlap).
+
+A clean rotation with no downtime requires the operator to also rotate on
+Pangolin's side in lockstep; `just newt-uninstall && just newt-install` is
+the heaviest hammer if anything looks stuck.
 
 ---
 

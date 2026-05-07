@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-07T18:15:46.417Z",
-    "version": 38,
+    "updatedAt": "2026-05-07T22:35:38.795Z",
+    "version": 40,
     "tddMode": "recommended"
   },
   "features": [
@@ -326,6 +326,35 @@
       "version": 1,
       "createdAt": "2026-05-07T18:04:06.881Z",
       "updatedAt": "2026-05-07T18:15:46.417Z"
+    },
+    {
+      "id": "cluster.metrics-server",
+      "description": "Install metrics-server in kube-system with Talos-friendly kubelet args (--kubelet-insecure-tls, InternalIP-first address resolution) and restricted-grade containerSecurityContext, enabling kubectl top and HPA.",
+      "module": "cluster",
+      "priority": 13,
+      "status": "implemented",
+      "acceptance": [
+        "`tools/cluster/metrics-server/{install.sh,uninstall.sh,smoke.sh,helm-values.yaml,chart-version.txt}` exist; `*.sh` are executable and start with the `${TOOLS_DIR:?...}` preamble.",
+        "`tools/.env.example` declares `METRICS_SERVER_CHART_VERSION=<pinned>` (matches `chart-version.txt`). The `bootstrap.config-scheme` test required-vars list is extended with the new key.",
+        "`tools/Justfile` exposes three `[no-cd]` recipes: `metrics-install`, `metrics-smoke`, `metrics-uninstall`. Install and smoke depend on `env-check`.",
+        "`install.sh` helm-installs the pinned chart (`metrics-server/metrics-server` from `https://kubernetes-sigs.github.io/metrics-server/`) into the `kube-system` namespace with `--wait`, then waits for `apiservice/v1beta1.metrics.k8s.io` to report `Available=True` within 60s; emits a drift warning when `.env` METRICS_SERVER_CHART_VERSION differs from `chart-version.txt`.",
+        "`helm-values.yaml` declares `replicas: 1`; `args` containing both `--kubelet-insecure-tls` and `--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP`; `apiService.create: true`; restricted-grade containerSecurityContext (`runAsNonRoot: true`, `runAsUser: 1000`, `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `seccompProfile.type: RuntimeDefault`); podSecurityContext with `runAsNonRoot: true` and `seccompProfile.type: RuntimeDefault`.",
+        "Re-running `just metrics-install` is a no-op: `helm upgrade --install` reports unchanged.",
+        "`just metrics-uninstall` removes the helm release and is safe to run when nothing is installed (no errors on missing resources).",
+        "`just metrics-smoke` runs `helm -n kube-system status metrics-server` and `kubectl wait --for=condition=Available --timeout=60s apiservice/v1beta1.metrics.k8s.io` (minimal smoke; full `kubectl top` validation is operator-side).",
+        "`tools/Makefile` has a new `test-cluster.metrics-server` target wired into the top-level `test:` aggregator. Offline assertions: file presence + executable + preamble; install.sh references `helm upgrade --install metrics-server metrics-server/metrics-server`, `kube-system`, `apiservice/v1beta1.metrics.k8s.io`, `--wait`; helm-values.yaml has `--kubelet-insecure-tls`, `--kubelet-preferred-address-types=InternalIP`, `apiService:` plus `create: true`, `runAsNonRoot: true`, `readOnlyRootFilesystem: true`, `drop:` followed by `- ALL`; smoke.sh references `helm`, `status metrics-server`, `apiservice/v1beta1.metrics.k8s.io`; chart-version.txt matches `^[0-9]+\\.[0-9]+\\.[0-9]+$`; .env.example has `^METRICS_SERVER_CHART_VERSION=[0-9]+\\.[0-9]+\\.[0-9]+`; Justfile has the three recipes each preceded by `[no-cd]`.",
+        "`tools/docs/INIT-CLUSTER.md` Phase 2 gains a 'metrics-server' subsection: prerequisites (working cluster only), the three recipes, what it enables (`kubectl top`, HPA), and the `--kubelet-insecure-tls` rationale. Configuration table gains METRICS_SERVER_CHART_VERSION.",
+        "`README.md` (top-level) references `just metrics-install` as Phase 2 step 5 in the per-cluster workflow; clarifies it is independent of other Phase 2 services and NOT part of `cluster-up`.",
+        "`clusters/k8s4/.env` is updated with `METRICS_SERVER_CHART_VERSION=3.13.0` so `just env-check` continues to pass.",
+        "All existing structural tests still pass when run as `npm test` from `clusters/k8s4/` (which runs the tools structural tests + the cluster smoke). The new `test-cluster.metrics-server` is part of that run."
+      ],
+      "dependsOn": [
+        "bootstrap.split-tools-and-clusters"
+      ],
+      "notes": "Pinned chart 3.13.0 (app v0.8.0). Lives in kube-system (canonical home for system addons). --kubelet-insecure-tls because Talos rotates kubelet serving certs and signs them with a per-node CA that's tricky to surface inside the pod; trust boundary is the cluster network. --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP because the cluster has no DNS for short Hostnames (cp, wk0) — without this metrics-server times out trying to dial cp:10250. readOnlyRootFilesystem=true is fine here (chart's emptyDir at /tmp covers --cert-dir). 1 replica matches our 1+1 cluster. Smoke is minimal (APIService Available only); operator runs kubectl top nodes/pods manually for the full proof. cluster-up stays Phase-1; metrics-server is opt-in.</notes>\n<parameter name=\"companionFile\">cluster.metrics-server.md",
+      "version": 1,
+      "createdAt": "2026-05-07T22:25:31.063Z",
+      "updatedAt": "2026-05-07T22:35:38.795Z"
     }
   ]
 }

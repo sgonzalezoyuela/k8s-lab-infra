@@ -1,0 +1,70 @@
+# metrics-server values for Talos. Pinned single replica (1+1 cluster — no
+# point running 2 replicas when there is exactly one worker to schedule them
+# onto). HA upgrades to 2 replicas + PDB are out of scope; trivially flipped
+# later by bumping `replicas` and adding `pdb.create=true`.
+#
+# --kubelet-insecure-tls because Talos rotates kubelet serving certs and
+# signs them with a per-node CA that is non-trivial to surface inside the
+# metrics-server pod (Talos does not expose the kubelet serving CA via the
+# usual /etc/kubernetes/pki path; it lives in machined's secret store).
+# Trust boundary is the cluster network: kubelet <-> metrics-server traffic
+# stays on the pod network, never traverses an untrusted segment. This
+# matches what k3s, EKS, GKE, AKS, and Talos's own recommended deployment
+# do by default; it is not a "lab shortcut".
+#
+# --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP because
+# our nodes only have Hostname=cp / wk0 (no cluster DNS for them) and an
+# InternalIP. The default order is Hostname,InternalDNS,InternalIP,...
+# which makes metrics-server try `https://cp:10250` first, time out, and
+# eventually fall through. Putting InternalIP first cuts that to a single
+# successful dial.
+#
+# --metric-resolution=15s is the chart default but pinned explicitly so a
+# future chart bump can't silently widen the scrape window.
+
+replicas: 1
+
+args:
+  - --kubelet-insecure-tls
+  - --kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP
+  - --metric-resolution=15s
+
+# The chart creates the APIService v1beta1.metrics.k8s.io and registers it
+# against the metrics-server Service. Pinned explicitly because this is the
+# whole point of installing the chart; if a future chart default ever flips
+# to false, we want to fail loudly.
+apiService:
+  create: true
+
+# Pod-level security. Restricted-PSA-compliant even though kube-system is
+# unlabelled — defence in depth.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level security. uid 1000 is what the upstream metrics-server
+# image expects (its `nobody` is 65534, but the chart documents 1000 as
+# the safe non-root uid for the writable emptyDir at /tmp).
+# readOnlyRootFilesystem: true is fine because the chart ships an emptyDir
+# mounted at /tmp, which is where --cert-dir writes the self-signed serving
+# cert metrics-server presents to the kube-apiserver aggregator.
+containerSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# We don't ship a ServiceMonitor or the chart's Prometheus exporter; the
+# observability story (Prometheus + ServiceMonitor wiring) lands in a later
+# Phase-2 feature. Pinned to false so a future chart default can't silently
+# turn it on (and start scraping a non-existent Prometheus).
+metrics:
+  enabled: false
+serviceMonitor:
+  enabled: false

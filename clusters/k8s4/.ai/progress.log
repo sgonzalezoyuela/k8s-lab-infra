@@ -35,3 +35,5 @@
 2026-05-07T16:17:24.094Z [IMPLEMENTED] <cluster.newt-pangolin-client> Implemented feature cluster.newt-pangolin-client (awaiting review)
 2026-05-07T18:04:06.881Z [CREATE] <cluster.ingress-nginx> Created feature cluster.ingress-nginx
 2026-05-07T18:15:46.418Z [IMPLEMENTED] <cluster.ingress-nginx> Implemented feature cluster.ingress-nginx (awaiting review)
+2026-05-07T22:25:31.063Z [CREATE] <cluster.metrics-server> Created feature cluster.metrics-server
+2026-05-07T22:35:38.795Z [IMPLEMENTED] <cluster.metrics-server> Implemented feature cluster.metrics-server (awaiting review)

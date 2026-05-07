@@ -45,6 +45,7 @@ test: test-cluster.cert-manager
 test: test-cluster.metallb
 test: test-cluster.newt
 test: test-cluster.ingress-nginx
+test: test-cluster.metrics-server
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -110,7 +111,8 @@ test-bootstrap.config-scheme:
 		          CA_CERT_PATH CA_KEY_PATH \
 		          CLUSTER_ISSUER_NAME CERT_MANAGER_CHART_VERSION \
 		          PANGOLIN_ENDPOINT NEWT_ID NEWT_SECRET NEWT_IMAGE_TAG \
-		          INGRESS_NGINX_CHART_VERSION INGRESS_LB_IP INGRESS_DEFAULT_TLS_SECRET" ; \
+		          INGRESS_NGINX_CHART_VERSION INGRESS_LB_IP INGRESS_DEFAULT_TLS_SECRET \
+		          METRICS_SERVER_CHART_VERSION" ; \
 		test -f "$(TOOLS_DIR)/.env.example" \
 		  || { echo "    [FAIL] tools/.env.example missing" >&2 ; exit 1 ; } ; \
 		for k in $$required ; do \
@@ -1020,3 +1022,109 @@ test-cluster.ingress-nginx:
 		  || { echo "    [FAIL] README.md does not reference just ingress-install" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] cluster.ingress-nginx"
+
+# ---------------------------------------------------------------------------
+# cluster.metrics-server
+# ---------------------------------------------------------------------------
+# Offline structural verification of the Phase-2 metrics-server assets:
+#   - all five tools/cluster/metrics-server/* files exist; the *.sh are
+#     executable and start with the "$${TOOLS_DIR:?...}" preamble.
+#   - install.sh references the helm install pattern, kube-system, the
+#     APIService Available wait, and --wait.
+#   - helm-values.yaml has --kubelet-insecure-tls,
+#     --kubelet-preferred-address-types=InternalIP, apiService.create=true,
+#     replicas=1, runAsNonRoot=true, readOnlyRootFilesystem=true, and
+#     capabilities.drop: [ALL].
+#   - smoke.sh references helm, status metrics-server, and the APIService.
+#   - chart-version.txt matches ^[0-9]+\.[0-9]+\.[0-9]+$ (NO `v` prefix —
+#     matches metallb/ingress-nginx, differs from cert-manager).
+#   - tools/.env.example carries METRICS_SERVER_CHART_VERSION=<bare semver>.
+#   - tools/Justfile has the three [no-cd] recipes.
+#   - INIT-CLUSTER.md mentions metrics-install and metrics-server.
+#   - top-level README.md references just metrics-install.
+.PHONY: test-cluster.metrics-server
+test-cluster.metrics-server:
+	@echo "==> cluster.metrics-server"
+	@$(NIX_DEV) bash -c '\
+		set -eu ; \
+		export TOOLS_DIR="$(TOOLS_DIR)" ; \
+		ASSETS="$(TOOLS_DIR)/cluster/metrics-server" ; \
+		for f in install.sh uninstall.sh smoke.sh ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		  test -x "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f not executable" >&2 ; exit 1 ; } ; \
+		  head -1 "$$ASSETS/$$f" | grep -q "^#!/usr/bin/env bash" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing bash shebang on line 1" >&2 ; exit 1 ; } ; \
+		  head -5 "$$ASSETS/$$f" | grep -qE "\\\$$\\{TOOLS_DIR:\\?" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing TOOLS_DIR preamble in first 5 lines" >&2 ; exit 1 ; } ; \
+		done ; \
+		for f in helm-values.yaml chart-version.txt ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "helm upgrade --install metrics-server metrics-server/metrics-server" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing helm upgrade --install metrics-server metrics-server/metrics-server" >&2 ; exit 1 ; } ; \
+		grep -q "kube-system" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing kube-system namespace" >&2 ; exit 1 ; } ; \
+		grep -q "apiservice/v1beta1.metrics.k8s.io" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing apiservice/v1beta1.metrics.k8s.io wait" >&2 ; exit 1 ; } ; \
+		grep -q -- "--wait" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh helm upgrade missing --wait" >&2 ; exit 1 ; } ; \
+		grep -q "kubernetes-sigs.github.io/metrics-server" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing helm repo URL https://kubernetes-sigs.github.io/metrics-server/" >&2 ; exit 1 ; } ; \
+		grep -qE "chart-version.txt" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing chart-version.txt drift warning" >&2 ; exit 1 ; } ; \
+		grep -q -- "--kubelet-insecure-tls" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing --kubelet-insecure-tls (Talos rotates kubelet serving certs; trust boundary is the cluster network)" >&2 ; exit 1 ; } ; \
+		grep -q -- "--kubelet-preferred-address-types=InternalIP" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing --kubelet-preferred-address-types=InternalIP (cluster has no DNS for short Hostnames cp/wk0; InternalIP must be first)" >&2 ; exit 1 ; } ; \
+		grep -qE "^apiService:" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing apiService: block" >&2 ; exit 1 ; } ; \
+		grep -A2 "^apiService:" "$$ASSETS/helm-values.yaml" | grep -qE "create:[[:space:]]*true" \
+		  || { echo "    [FAIL] helm-values.yaml missing apiService.create: true" >&2 ; exit 1 ; } ; \
+		grep -qE "^replicas:[[:space:]]*1" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing replicas: 1" >&2 ; exit 1 ; } ; \
+		grep -q "runAsNonRoot: true" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing runAsNonRoot: true" >&2 ; exit 1 ; } ; \
+		grep -q "readOnlyRootFilesystem: true" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing readOnlyRootFilesystem: true (chart provides emptyDir at /tmp for --cert-dir, so this is safe)" >&2 ; exit 1 ; } ; \
+		grep -q "allowPrivilegeEscalation: false" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing allowPrivilegeEscalation: false" >&2 ; exit 1 ; } ; \
+		grep -qE "runAsUser:[[:space:]]*1000" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing runAsUser: 1000" >&2 ; exit 1 ; } ; \
+		grep -A2 -E "drop:[[:space:]]*$$" "$$ASSETS/helm-values.yaml" | grep -qE -- "-[[:space:]]*ALL" \
+		  || { echo "    [FAIL] helm-values.yaml missing capabilities.drop: [ALL]" >&2 ; exit 1 ; } ; \
+		seccomp_count=$$(grep -cE "type:[[:space:]]*RuntimeDefault" "$$ASSETS/helm-values.yaml") ; \
+		[ "$$seccomp_count" -ge 2 ] \
+		  || { echo "    [FAIL] helm-values.yaml needs RuntimeDefault seccomp on BOTH pod- and container-level securityContext (found $$seccomp_count occurrences, need >=2)" >&2 ; exit 1 ; } ; \
+		grep -q "helm" "$$ASSETS/smoke.sh" && grep -q "status metrics-server" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing helm status metrics-server" >&2 ; exit 1 ; } ; \
+		grep -q "apiservice/v1beta1.metrics.k8s.io" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing apiservice/v1beta1.metrics.k8s.io wait" >&2 ; exit 1 ; } ; \
+		grep -q "helm uninstall metrics-server" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh missing helm uninstall metrics-server" >&2 ; exit 1 ; } ; \
+		ver=$$(tr -d "[:space:]" < "$$ASSETS/chart-version.txt") ; \
+		echo "$$ver" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$$" \
+		  || { echo "    [FAIL] chart-version.txt does not match ^[0-9]+\\.[0-9]+\\.[0-9]+\$$ (got: $$ver; note: NO v prefix, matches metallb/ingress-nginx)" >&2 ; exit 1 ; } ; \
+		grep -qE "^METRICS_SERVER_CHART_VERSION=[0-9]+\.[0-9]+\.[0-9]+" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing METRICS_SERVER_CHART_VERSION=<bare semver>" >&2 ; exit 1 ; } ; \
+		for r in metrics-install metrics-smoke metrics-uninstall ; do \
+		  grep -qE "^$${r}:" "$(TOOLS_DIR)/Justfile" \
+		    || { echo "    [FAIL] Justfile lacks recipe: $$r" >&2 ; exit 1 ; } ; \
+		  prev_line=$$(grep -B1 "^$${r}:" "$(TOOLS_DIR)/Justfile" | head -1) ; \
+		  echo "$$prev_line" | grep -qE "^\[no-cd\]" \
+		    || { echo "    [FAIL] Justfile recipe $$r missing [no-cd] attribute on the line above" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -A4 "^metrics-install:" "$(TOOLS_DIR)/Justfile" | grep -q "env-check" \
+		  || { echo "    [FAIL] Justfile recipe metrics-install does not depend on env-check" >&2 ; exit 1 ; } ; \
+		grep -A4 "^metrics-smoke:" "$(TOOLS_DIR)/Justfile" | grep -q "env-check" \
+		  || { echo "    [FAIL] Justfile recipe metrics-smoke does not depend on env-check" >&2 ; exit 1 ; } ; \
+		grep -q "metrics-install" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing metrics-install recipe reference" >&2 ; exit 1 ; } ; \
+		grep -qi "metrics-server" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing metrics-server coverage" >&2 ; exit 1 ; } ; \
+		grep -q "just metrics-install" "$(REPO_ROOT)/README.md" \
+		  || { echo "    [FAIL] README.md does not reference just metrics-install" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] cluster.metrics-server"

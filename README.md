@@ -56,6 +56,11 @@ just newt-smoke
 # and reach the LB IP from your workstation via the host route above.
 just ingress-install     # ingress controller (depends on cert-manager + metallb)
 just ingress-smoke
+
+# metrics-server — cluster CPU/memory metrics for `kubectl top` and HPA.
+# Independent of all other Phase-2 services and NOT part of `just cluster-up`.
+just metrics-install     # cluster metrics (kubectl top, HPA); independent of other phase-2 services
+just metrics-smoke
 ```
 
 The cluster's `nix develop` shell exports:

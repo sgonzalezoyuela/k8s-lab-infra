@@ -200,6 +200,7 @@ Talos patches, Helm values) is rendered from it.
 | `INGRESS_NGINX_CHART_VERSION` | Phase 2: pinned `kubernetes/ingress-nginx` Helm chart version (e.g. `4.15.1`). **No `v` prefix** (matches MetalLB, differs from cert-manager). The bundled default lives at `tools/cluster/ingress-nginx/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 | `INGRESS_LB_IP` | Phase 2: LoadBalancer IP pinned to the ingress-nginx controller Service. **Must be inside `${METALLB_RANGE}`**; `ingress-install` fails fast otherwise. The recommended pattern is to reserve a stable IP near the bottom of the pool (e.g. `10.4.200.10`) and point your wildcard DNS at it. |
 | `INGRESS_DEFAULT_TLS_SECRET` | Phase 2: name of both the cert-manager `Certificate` and the resulting `Secret` in the `ingress-nginx` namespace. Default `ingress-default-tls`. Wired into the controller via `controller.extraArgs.default-ssl-certificate=ingress-nginx/$INGRESS_DEFAULT_TLS_SECRET` so unmatched-SNI clients still get a valid handshake against `*.${CLUSTER_DOMAIN}`. |
+| `METRICS_SERVER_CHART_VERSION` | Phase 2: pinned `kubernetes-sigs/metrics-server` Helm chart version (e.g. `3.13.0`). **No `v` prefix** (matches MetalLB/ingress-nginx, differs from cert-manager). The bundled default lives at `tools/cluster/metrics-server/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 
 ---
 
@@ -595,6 +596,148 @@ back to the wildcard default-ssl Certificate and you still get a valid
 handshake — but with the wildcard's `commonName` rather than the host's.
 For internal/throwaway services this is often good enough; for anything
 user-facing, prefer the per-Ingress flow above.
+
+---
+
+## Phase 2: metrics-server
+
+Phase 2 is **opt-in** and **not part of `just cluster-up`**. metrics-server
+is the cluster-wide CPU/memory metrics aggregator that the kube-apiserver
+exposes at `/apis/metrics.k8s.io/v1beta1`. It is what `kubectl top nodes`,
+`kubectl top pods`, and the **HorizontalPodAutoscaler** controller all
+read from. Without it `kubectl top` errors out with
+`Metrics API not available` and HPAs sit `<unknown>` forever.
+
+This recipe is **independent of every other Phase 2 service** — it does
+not depend on MetalLB, cert-manager, ingress-nginx, or newt, and nothing
+else depends on it. Install it whenever you need autoscaling or
+operator-side resource visibility.
+
+### Prerequisites
+
+- A working cluster (`just cluster-up` finished and `kubectl get nodes` is
+  green).
+- `KUBECONFIG` exported (the cluster `nix develop` shell does this; if you
+  bypassed it, run `just kubeconfig`).
+- `.env` contains `METRICS_SERVER_CHART_VERSION`.
+
+### Install
+
+```bash
+just metrics-install
+```
+
+The recipe:
+
+1. `helm upgrade --install metrics-server metrics-server/metrics-server`
+   in namespace `kube-system` (the canonical home for cluster system
+   add-ons; we deliberately do not create or label it), with the pinned
+   chart version and `helm-values.yaml`. `--wait` blocks until the
+   Deployment is rolled out.
+2. Waits ≤60s for `apiservice/v1beta1.metrics.k8s.io` to report
+   `Available=True`. That condition is the actual contract `kubectl top`
+   and HPA consume; the chart creates the APIService but does not block
+   on it becoming Available.
+
+The recipe is idempotent: re-running it leaves the Helm release at the
+same revision and reports `unchanged` for the deployment.
+
+### Verify
+
+```bash
+kubectl get apiservice v1beta1.metrics.k8s.io
+# NAME                     SERVICE                      AVAILABLE   AGE
+# v1beta1.metrics.k8s.io   kube-system/metrics-server   True        30s
+
+kubectl top nodes
+# NAME                          CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%
+# cp.k8s4.lab.atricore.io       142m         3%     1654Mi          41%
+# wk0.k8s4.lab.atricore.io      221m         2%     2143Mi          26%
+
+kubectl top pods -A
+```
+
+`kubectl top` may take 30–60s to surface metrics on a fresh install
+because the kubelet scrape window is `--metric-resolution=15s` and
+metrics-server needs at least one full window before it has anything
+to serve. This is expected; the smoke does not poll `kubectl top` for
+that reason.
+
+### Smoke
+
+```bash
+just metrics-smoke
+```
+
+This runs `helm -n kube-system status metrics-server`, then
+`kubectl wait --for=condition=Available --timeout=60s
+apiservice/v1beta1.metrics.k8s.io`. Minimal by design — `kubectl top`
+validation is left as an operator-side step (see Verify above).
+
+### Uninstall
+
+```bash
+just metrics-uninstall
+```
+
+Removes the Helm release (Deployment, Service, APIService, RBAC). The
+`kube-system` namespace is **not** touched. Safe to re-run when nothing
+is installed.
+
+### Talos-specific gotchas
+
+The two non-default flags in `helm-values.yaml` exist specifically
+because of Talos:
+
+1. **`--kubelet-insecure-tls`.** Talos rotates kubelet serving certs and
+   signs them with a per-node CA that lives in machined's secret store —
+   it is not exposed at `/etc/kubernetes/pki` or via any standard
+   ConfigMap, so making metrics-server validate kubelet certs requires
+   a custom CA-distribution path that is genuinely awkward to wire up.
+   The trust boundary here is the cluster network: kubelet ↔
+   metrics-server traffic stays on the pod network and never traverses
+   an untrusted segment. This matches what k3s, EKS, GKE, AKS, and
+   Talos's own recommended deployment do by default — it is not a "lab
+   shortcut".
+
+2. **`--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP`.**
+   The chart default order starts with `Hostname` and `InternalDNS`. On
+   this cluster there is no DNS for the short hostnames `cp` / `wk0`,
+   so metrics-server ends up trying `https://cp:10250` first, timing out
+   per node, and only then falling through to the InternalIP. Putting
+   InternalIP first makes the very first dial succeed.
+
+### Adding an HPA
+
+A minimal HPA against a Deployment looks like this once metrics-server
+is installed:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: my-app
+  namespace: my-app
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: my-app
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+```
+
+`kubectl get hpa -n my-app` should show the current/target ratio
+within 30–60s of creation (one scrape window). This stack does not
+ship a custom-metrics adapter; HPAs targeting non-resource metrics
+(Prometheus, custom application metrics) are out of scope.
 
 ---
 

@@ -169,3 +169,18 @@ ingress-smoke: env-check
 [no-cd]
 ingress-uninstall:
     "$TOOLS_DIR/cluster/ingress-nginx/uninstall.sh"
+
+# Phase 2: install metrics-server in kube-system (Talos-friendly kubelet args; restricted containerSecurityContext). Idempotent.
+[no-cd]
+metrics-install: env-check
+    "$TOOLS_DIR/cluster/metrics-server/install.sh"
+
+# Phase 2: assert the helm release is deployed and the v1beta1.metrics.k8s.io APIService is Available.
+[no-cd]
+metrics-smoke: env-check
+    "$TOOLS_DIR/cluster/metrics-server/smoke.sh"
+
+# Phase 2: remove the helm release (kube-system namespace is left alone).
+[no-cd]
+metrics-uninstall:
+    "$TOOLS_DIR/cluster/metrics-server/uninstall.sh"

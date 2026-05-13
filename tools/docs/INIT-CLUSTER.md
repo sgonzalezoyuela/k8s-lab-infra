@@ -134,6 +134,43 @@ The dev shell already exports `KUBECONFIG=_out/kubeconfig` and
 `TALOSCONFIG=_out/talosconfig`, so `kubectl` and `talosctl` Just Work after
 `just kubeconfig` finishes.
 
+### App-project workflow: `cluster-shell k8s4`
+
+When you are working in an application/project directory and only need the
+cluster auth variables and CLI tools, start the cluster shell from there:
+
+```bash
+cd /wa/my-app
+cluster-shell k8s4
+pwd
+kubectl get nodes
+```
+
+The command enters the `clusters/k8s4` Nix dev environment to compute
+`KUBECONFIG=<repo>/clusters/k8s4/_out/kubeconfig`,
+`TALOSCONFIG=<repo>/clusters/k8s4/_out/talosconfig`, `TOOLS_DIR`, and
+`A3C_HOME`, then returns the interactive shell to your original app directory.
+If `tools/scripts/` is not already on `PATH`, add it or call
+`<repo>/tools/scripts/cluster-shell k8s4` directly.
+
+Optional short alias:
+
+```bash
+alias ka3c4='cluster-shell k8s4'
+```
+
+Cluster maintenance recipes still belong in the cluster directory; `just` is
+not hijacked in app-project shells:
+
+```bash
+cd /wa/infra/k8s/lab/clusters/k8s4
+nix develop
+just env-check
+```
+
+For a one-off maintenance command from elsewhere, use an explicit subshell and
+`cd` into the cluster directory deliberately.
+
 > **Why the manual scp step?** The Proxmox API has no snippet-upload
 > endpoint. The bpg/proxmox provider works around that with SSH+SCP, which
 > would force OpenTofu to need SSH credentials in addition to the API token.

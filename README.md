@@ -71,6 +71,35 @@ The cluster's `nix develop` shell exports:
 - `KUBECONFIG`, `TALOSCONFIG` (point at this cluster's `_out/`)
 - `make` aliased to `make -f $TOOLS_DIR/Makefile` for structural tests
 
+### App-project shell access
+
+From an application project outside this repo, use the repository-provided
+command to enter the k8s4 tool environment without moving your prompt out of
+the app directory:
+
+```bash
+cd /wa/my-app
+cluster-shell k8s4
+pwd                    # still /wa/my-app
+kubectl get nodes      # uses clusters/k8s4/_out/kubeconfig
+```
+
+If `tools/scripts/` is not on your `PATH`, call it directly or add your own
+shell alias/wrapper. A short cluster alias is optional:
+
+```bash
+alias ka3c4='cluster-shell k8s4'
+```
+
+Cluster maintenance recipes still require deliberately working from the cluster
+directory so `just` runs the cluster tools Justfile against cluster-local files:
+
+```bash
+cd clusters/k8s4
+nix develop
+just env-check
+```
+
 ## Workflow (new cluster)
 
 ```bash
@@ -123,7 +152,7 @@ a3c-lab/
 │   ├── infra/                # OpenTofu MODULE (no state)
 │   ├── talos/{schematic.yaml,patches/,scripts/}
 │   ├── docs/INIT-CLUSTER.md
-│   └── scripts/new-cluster.sh
+│   └── scripts/{cluster-shell,cluster-shell.sh,new-cluster.sh}
 └── clusters/
     ├── _scaffold/            # template for new clusters
     └── k8s4/

@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-07T22:55:58.602Z",
-    "version": 41,
+    "updatedAt": "2026-05-13T14:13:39.765Z",
+    "version": 43,
     "tddMode": "recommended"
   },
   "features": [
@@ -355,6 +355,34 @@
       "version": 1,
       "createdAt": "2026-05-07T22:25:31.063Z",
       "updatedAt": "2026-05-07T22:55:58.602Z"
+    },
+    {
+      "id": "ops.cluster-shell-from-anywhere",
+      "description": "Provide a safe cluster-shell command that enters a named cluster Nix environment from any current project directory, then returns the interactive shell to the original directory with correct kube/talos settings.",
+      "module": "ops",
+      "priority": 14,
+      "status": "implemented",
+      "acceptance": [
+        "`tools/scripts/cluster-shell.sh` exists, is executable, and implements `cluster-shell <cluster-name>` with `k8s4` working from outside the cluster directory.",
+        "The script derives the repository root from its own location, not from the caller's current directory, and resolves the target only under `<repo>/clusters/<name>`.",
+        "Cluster names containing path separators, `..`, leading `-`, or names that do not correspond to an existing cluster directory with `flake.nix` are rejected with a clear non-zero error.",
+        "The script changes to the resolved cluster directory before invoking `nix develop`, so the existing shellHook computes `KUBECONFIG`, `TALOSCONFIG`, `TOOLS_DIR`, and `A3C_HOME` from the cluster directory rather than the caller's project directory.",
+        "When invoked from an arbitrary directory, the resulting interactive shell starts back in that original directory while preserving cluster auth variables, including `KUBECONFIG=<repo>/clusters/k8s4/_out/kubeconfig` and `TALOSCONFIG=<repo>/clusters/k8s4/_out/talosconfig`.",
+        "Both bash and zsh are supported: the script can launch either shell explicitly, or choose a safe default from `$SHELL` with fallback to zsh then bash.",
+        "The app-project shell is not given cluster Justfile shortcuts: no `cluster-just` helper is added, and `JUST_JUSTFILE` is unset before the final interactive shell so `just` is not hijacked to the cluster tools Justfile.",
+        "`tools/Makefile` includes an offline structural test target for `ops.cluster-shell-from-anywhere` and wires it into `make test`; the test covers path validation, non-cluster cwd behavior, expected env paths, bash/zsh launch support, and absence of cluster Justfile hijacking.",
+        "`README.md` and `tools/docs/INIT-CLUSTER.md` document `cluster-shell k8s4` for app-project workflows, including the optional user alias `alias ka3c4='cluster-shell k8s4'` and the caveat that cluster maintenance recipes still require entering the cluster directory deliberately.",
+        "`tools/scripts/new-cluster.sh` and the `just new-cluster` recipe are not changed by this feature; no per-cluster shell function or alias is generated for new clusters.",
+        "All existing structural tests still pass when run as `npm test` from `clusters/k8s4/`."
+      ],
+      "dependsOn": [
+        "bootstrap.split-tools-and-clusters"
+      ],
+      "notes": "Chosen design: a shared script/command rather than generated parent-shell functions. Nix shellHook cannot safely install a function into the caller's parent shell. The script must cd into the cluster before nix develop, suppress the shellHook's automatic zsh exec as needed, then cd the final interactive shell back to the original project directory. User explicitly requested bash+zsh support, `cluster-shell k8s4`, no new-cluster integration for now, no cluster just helpers from app directories, and strict in-repo cluster validation.",
+      "version": 1,
+      "companionFile": "ops.cluster-shell-from-anywhere.md",
+      "createdAt": "2026-05-13T14:12:52.054Z",
+      "updatedAt": "2026-05-13T14:13:39.765Z"
     }
   ]
 }

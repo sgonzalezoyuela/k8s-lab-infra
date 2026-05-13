@@ -46,6 +46,89 @@ test: test-cluster.metallb
 test: test-cluster.newt
 test: test-cluster.ingress-nginx
 test: test-cluster.metrics-server
+test: test-ops.cluster-shell-from-anywhere
+
+# ---------------------------------------------------------------------------
+# ops.cluster-shell-from-anywhere
+# ---------------------------------------------------------------------------
+.PHONY: test-ops.cluster-shell-from-anywhere
+test-ops.cluster-shell-from-anywhere:
+	@echo "==> ops.cluster-shell-from-anywhere"
+	@$(NIX_DEV) bash -c '\
+		set -eu ; \
+		script="$(TOOLS_DIR)/scripts/cluster-shell.sh" ; \
+		wrapper="$(TOOLS_DIR)/scripts/cluster-shell" ; \
+		test -x "$$script" \
+		  || { echo "    [FAIL] $$script missing or not executable" >&2 ; exit 1 ; } ; \
+		test -x "$$wrapper" \
+		  || { echo "    [FAIL] $$wrapper missing or not executable" >&2 ; exit 1 ; } ; \
+		for p in "dirname --" "realpath \"\$$script_dir/../..\"" "clusters" "flake.nix" "CLUSTER_SHELL_ORIG_PWD" "cd -- \"\$$cluster_dir\"" "nix develop --command" "unset JUST_JUSTFILE" "NIX_DEVELOP_NO_ZSH" "--shell" "bash|zsh" ; do \
+		  grep -q -- "$$p" "$$script" \
+		    || { echo "    [FAIL] cluster-shell.sh missing structural pattern: $$p" >&2 ; exit 1 ; } ; \
+		done ; \
+		if grep -q "cluster-just" "$$script" "$(TOOLS_DIR)/Justfile" ; then \
+		  echo "    [FAIL] feature must not add cluster-just" >&2 ; exit 1 ; \
+		fi ; \
+		for bad in "bad/name" ".." "k8s..4" "-k8s4" "does-not-exist" ; do \
+		  if "$$script" "$$bad" >/tmp/cluster-shell-bad.out 2>&1 ; then \
+		    echo "    [FAIL] invalid cluster name unexpectedly succeeded: $$bad" >&2 ; exit 1 ; \
+		  fi ; \
+		  grep -qiE "invalid|not found|missing" /tmp/cluster-shell-bad.out \
+		    || { echo "    [FAIL] invalid cluster error was not clear for: $$bad" >&2 ; cat /tmp/cluster-shell-bad.out >&2 ; exit 1 ; } ; \
+		done ; \
+		tmp=$$(mktemp -d) ; \
+		trap "rm -rf $$tmp /tmp/cluster-shell-bad.out" EXIT ; \
+		mkdir -p "$$tmp/bin" "$$tmp/app" ; \
+		printf "%s\n" \
+		  "#!/usr/bin/env bash" \
+		  "set -eu" \
+		  "[ \"\$$1\" = develop ] || { echo \"mock nix: expected develop\" >&2; exit 1; }" \
+		  "shift" \
+		  "[ \"\$$1\" = --command ] || { echo \"mock nix: expected --command\" >&2; exit 1; }" \
+		  "shift" \
+		  "shell=\"\$$1\"" \
+		  "shift" \
+		  "[ \"\$$1\" = -lc ] || { echo \"mock nix: expected -lc\" >&2; exit 1; }" \
+		  "shift" \
+		  "export NIX_MOCK_CWD=\"\$$PWD\"" \
+		  "export TOOLS_DIR=\"\$$(realpath \"\$$PWD/../../tools\")\"" \
+		  "export KUBECONFIG=\"\$$PWD/_out/kubeconfig\"" \
+		  "export TALOSCONFIG=\"\$$PWD/_out/talosconfig\"" \
+		  "export A3C_HOME=\"\$$PWD\"" \
+		  "export JUST_JUSTFILE=\"\$$TOOLS_DIR/Justfile\"" \
+		  "exec \"\$$shell\" -lc \"\$$1\"" \
+		  > "$$tmp/bin/nix" ; \
+		chmod +x "$$tmp/bin/nix" ; \
+		probe="printf \"PWD=%s\\nNIX_MOCK_CWD=%s\\nKUBECONFIG=%s\\nTALOSCONFIG=%s\\nTOOLS_DIR=%s\\nA3C_HOME=%s\\nJUST_JUSTFILE=%s\\nSHELL_OK=bash\\n\" \"\$$PWD\" \"\$$NIX_MOCK_CWD\" \"\$$KUBECONFIG\" \"\$$TALOSCONFIG\" \"\$$TOOLS_DIR\" \"\$$A3C_HOME\" \"\$${JUST_JUSTFILE:-unset}\"" ; \
+		( cd "$$tmp/app" && PATH="$$tmp/bin:$$PATH" CLUSTER_SHELL_TEST_COMMAND="$$probe" "$$script" --shell bash k8s4 > "$$tmp/bash.out" ) ; \
+		grep -q "^PWD=$$tmp/app$$" "$$tmp/bash.out" \
+		  || { echo "    [FAIL] final shell did not return to original cwd" >&2 ; cat "$$tmp/bash.out" >&2 ; exit 1 ; } ; \
+		grep -q "^NIX_MOCK_CWD=$(REPO_ROOT)/clusters/k8s4$$" "$$tmp/bash.out" \
+		  || { echo "    [FAIL] nix develop was not invoked from cluster dir" >&2 ; cat "$$tmp/bash.out" >&2 ; exit 1 ; } ; \
+		grep -q "^KUBECONFIG=$(REPO_ROOT)/clusters/k8s4/_out/kubeconfig$$" "$$tmp/bash.out" \
+		  || { echo "    [FAIL] KUBECONFIG path incorrect" >&2 ; cat "$$tmp/bash.out" >&2 ; exit 1 ; } ; \
+		grep -q "^TALOSCONFIG=$(REPO_ROOT)/clusters/k8s4/_out/talosconfig$$" "$$tmp/bash.out" \
+		  || { echo "    [FAIL] TALOSCONFIG path incorrect" >&2 ; cat "$$tmp/bash.out" >&2 ; exit 1 ; } ; \
+		grep -q "^TOOLS_DIR=$(REPO_ROOT)/tools$$" "$$tmp/bash.out" \
+		  || { echo "    [FAIL] TOOLS_DIR path incorrect" >&2 ; cat "$$tmp/bash.out" >&2 ; exit 1 ; } ; \
+		grep -q "^A3C_HOME=$(REPO_ROOT)/clusters/k8s4$$" "$$tmp/bash.out" \
+		  || { echo "    [FAIL] A3C_HOME path incorrect" >&2 ; cat "$$tmp/bash.out" >&2 ; exit 1 ; } ; \
+		grep -q "^JUST_JUSTFILE=unset$$" "$$tmp/bash.out" \
+		  || { echo "    [FAIL] JUST_JUSTFILE was not unset before final shell" >&2 ; cat "$$tmp/bash.out" >&2 ; exit 1 ; } ; \
+		grep -q "^SHELL_OK=bash$$" "$$tmp/bash.out" \
+		  || { echo "    [FAIL] bash launch probe failed" >&2 ; cat "$$tmp/bash.out" >&2 ; exit 1 ; } ; \
+		if command -v zsh >/dev/null 2>&1 ; then \
+		  zprobe="printf \"SHELL_OK=zsh\\nPWD=%s\\nJUST_JUSTFILE=%s\\n\" \"\$$PWD\" \"\$${JUST_JUSTFILE:-unset}\"" ; \
+		  ( cd "$$tmp/app" && PATH="$$tmp/bin:$$PATH" CLUSTER_SHELL_TEST_COMMAND="$$zprobe" "$$script" --shell zsh k8s4 > "$$tmp/zsh.out" ) ; \
+		  grep -q "^SHELL_OK=zsh$$" "$$tmp/zsh.out" \
+		    || { echo "    [FAIL] zsh launch probe failed" >&2 ; cat "$$tmp/zsh.out" >&2 ; exit 1 ; } ; \
+		  grep -q "^PWD=$$tmp/app$$" "$$tmp/zsh.out" \
+		    || { echo "    [FAIL] zsh final shell did not return to original cwd" >&2 ; cat "$$tmp/zsh.out" >&2 ; exit 1 ; } ; \
+		  grep -q "^JUST_JUSTFILE=unset$$" "$$tmp/zsh.out" \
+		    || { echo "    [FAIL] zsh probe saw JUST_JUSTFILE hijacking" >&2 ; cat "$$tmp/zsh.out" >&2 ; exit 1 ; } ; \
+		fi ; \
+	'
+	@echo "    [PASS] ops.cluster-shell-from-anywhere"
 
 # ---------------------------------------------------------------------------
 # bootstrap.nix-flake-tools
@@ -229,7 +312,7 @@ test-talos.image-factory-schematic:
 		cp "$(TOOLS_DIR)/Justfile"     "$$tmp/Justfile" ; \
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp/tools/.env.example" ; \
 		cp "$(TOOLS_DIR)/.env.example" "$$tmp/.env.example" ; \
-		if ( cd "$$tmp" && TOOLS_DIR="$$tmp/tools" "$$tmp/tools/talos/scripts/build-image.sh" </dev/null >/dev/null 2>&1 ) ; then \
+		if ( cd "$$tmp" && env -i PATH="$$PATH" HOME="$$HOME" TOOLS_DIR="$$tmp/tools" "$$tmp/tools/talos/scripts/build-image.sh" </dev/null >/dev/null 2>&1 ) ; then \
 		  echo "    [FAIL] build-image.sh should fail when env unset" >&2 ; exit 1 ; \
 		fi ; \
 	'

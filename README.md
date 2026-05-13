@@ -69,6 +69,13 @@ just metrics-smoke
 # services and NOT part of `just cluster-up`.
 just local-path-install  # rancher/local-path-provisioner; default StorageClass
 just local-path-smoke
+
+# sealed-secrets — bitnami-labs/sealed-secrets controller; turns Git into the
+# source of truth for Kubernetes Secrets by sealing them under an in-cluster
+# private key (commit the sealed YAML, the controller unseals on apply).
+# Independent of all other Phase-2 services and NOT part of `just cluster-up`.
+just sealed-secrets-install
+just sealed-secrets-smoke
 ```
 
 The cluster's `nix develop` shell exports:

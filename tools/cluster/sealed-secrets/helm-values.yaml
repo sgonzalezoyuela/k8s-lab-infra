@@ -1,0 +1,35 @@
+# Pinned controller image tag. Chart 2.18.4 ships app v0.34.0 by default;
+# pinning the tag here makes a future chart bump that changes its default
+# observable in our test diff (rather than silently shipping a new controller
+# version on the next `helm upgrade`).
+image:
+  tag: v0.34.0
+
+# Pod-level securityContext. Restricted-PSA compliant.
+# The chart's defaults are already safe; pinning makes a chart-default flip
+# observable in CI.
+securityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level securityContext. The upstream image's non-root user is uid
+# 1001; pinning explicitly so any future chart change is caught by the
+# structural tests.
+containerSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+# Observability surface — disabled until the cluster has a Prometheus to
+# point the ServiceMonitor at. Emitting one against a non-existent
+# Prometheus Operator just clutters the API surface.
+metrics:
+  serviceMonitor:
+    enabled: false

@@ -239,6 +239,7 @@ Talos patches, Helm values) is rendered from it.
 | `INGRESS_DEFAULT_TLS_SECRET` | Phase 2: name of both the cert-manager `Certificate` and the resulting `Secret` in the `ingress-nginx` namespace. Default `ingress-default-tls`. Wired into the controller via `controller.extraArgs.default-ssl-certificate=ingress-nginx/$INGRESS_DEFAULT_TLS_SECRET` so unmatched-SNI clients still get a valid handshake against `*.${CLUSTER_DOMAIN}`. |
 | `METRICS_SERVER_CHART_VERSION` | Phase 2: pinned `kubernetes-sigs/metrics-server` Helm chart version (e.g. `3.13.0`). **No `v` prefix** (matches MetalLB/ingress-nginx, differs from cert-manager). The bundled default lives at `tools/cluster/metrics-server/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 | `LOCAL_PATH_PROVISIONER_VERSION` | Phase 2: pinned `rancher/local-path-provisioner` upstream tag (e.g. `v0.0.31`). **`v` prefix is REQUIRED** — rancher tags use it (different from the Helm-chart entries above). The bundled default lives at `tools/cluster/local-path-provisioner/version.txt`; if `.env` differs, the install script warns and uses the `.env` value. Bumping requires re-vendoring `manifests/local-path-storage.yaml` from the new tag. |
+| `SEALED_SECRETS_CHART_VERSION` | Phase 2: pinned `bitnami-labs/sealed-secrets` Helm chart version (e.g. `2.18.4`). **No `v` prefix** — the chart uses bare semver (chart 2.18.4 ships controller app `v0.34.0`, which we pin explicitly in `helm-values.yaml`). The bundled default lives at `tools/cluster/sealed-secrets/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 
 ---
 
@@ -1153,6 +1154,140 @@ flake.nix                  dev shell with every tool
 Makefile, package.json     patagon test entrypoint (npm test → make test)
 .ai/                       harness state (architecture, features, companions)
 ```
+
+---
+
+## Phase 2: sealed-secrets
+
+Phase 2 is **opt-in** and **not part of `just cluster-up`**.
+[bitnami-labs/sealed-secrets](https://github.com/bitnami-labs/sealed-secrets)
+turns Git back into a viable source of truth for Kubernetes Secrets by
+sealing them under an in-cluster private key. Workflow:
+
+```bash
+echo -n "supersecret" \
+  | kubectl create secret generic my-app-db --dry-run=client \
+      --from-file=password=/dev/stdin -o yaml \
+  | kubeseal --controller-namespace=sealed-secrets --format yaml \
+  > my-app-db.sealed.yaml      # commit this
+kubectl apply -f my-app-db.sealed.yaml
+# In ~5s, kubectl get secret my-app-db -n default shows the unsealed Secret.
+```
+
+The `kubeseal` CLI is in the cluster `nix develop` shell.
+
+This recipe is **independent of every other Phase 2 service** — it does
+not depend on MetalLB, cert-manager, ingress-nginx, metrics-server,
+local-path-provisioner, or newt, and nothing else depends on it.
+
+### Prerequisites
+
+- A working cluster (`just cluster-up` finished and `kubectl get nodes`
+  is green). No special Talos config is needed — sealed-secrets is a
+  vanilla Deployment that talks to the API server.
+- `KUBECONFIG` exported (the cluster `nix develop` shell does this; if
+  you bypassed it, run `just kubeconfig`).
+- `.env` contains `SEALED_SECRETS_CHART_VERSION` (default `2.18.4`,
+  shipping controller app `v0.34.0`).
+
+### Install
+
+```bash
+just sealed-secrets-install
+```
+
+The recipe:
+
+1. Server-side applies `Namespace/sealed-secrets` labelled
+   `pod-security.kubernetes.io/enforce: restricted`. The dedicated
+   namespace is deliberate: the chart's default `kube-system` would
+   race Talos's system-namespaces controller for the PSA label (same
+   rationale as `metallb-system`).
+2. `helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets`
+   (the maintainers' org, not the bitnami-charts mirror which lags).
+3. `helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets`
+   in the `sealed-secrets` namespace with the pinned chart version and
+   `helm-values.yaml`. `--wait` blocks until the Deployment is rolled
+   out.
+
+The recipe is idempotent: a re-run with the same `.env` produces a
+no-op revision and the Deployment's spec stays unchanged.
+
+### Verify
+
+```bash
+kubectl -n sealed-secrets get pods
+# NAME                              READY   STATUS    RESTARTS   AGE
+# sealed-secrets-XXXXXXXXXX-XXXXX   1/1     Running   0          30s
+
+kubectl -n sealed-secrets get secret -l sealedsecrets.bitnami.com/sealed-secrets-key
+# NAME                     TYPE                AGE
+# sealed-secrets-keyXXXX   kubernetes.io/tls   30s
+
+kubeseal --controller-namespace=sealed-secrets --fetch-cert > /tmp/sealed-secrets.pub
+# Public cert — what you would pin in a kubeseal flag for offline sealing.
+```
+
+### Smoke
+
+```bash
+just sealed-secrets-smoke
+```
+
+This runs `helm -n sealed-secrets status sealed-secrets` and
+`kubectl -n sealed-secrets rollout status deployment/sealed-secrets
+--timeout=60s`. Minimal by design: no end-to-end seal/unseal probe
+here — that belongs in a future cross-cutting `ops.smoke-test` feature
+that exercises the full stack.
+
+### What this enables
+
+- **Commit-encrypted-Secrets workflow.** Plain Kubernetes Secrets
+  cannot be committed (base64 is encoding, not encryption). A
+  SealedSecret is asymmetrically encrypted with the cluster's public
+  key; only the in-cluster controller (holding the private key) can
+  unseal it. Commit the SealedSecret manifest and the controller
+  produces a normal `Secret` on apply.
+- **A standard kubeseal workflow** (see the `kubeseal` invocation at
+  the top of this section). `--controller-namespace=sealed-secrets`
+  is required because we install in a non-default namespace.
+
+### Key auto-rotation
+
+The controller rotates the sealing keypair every **30 days** by
+default (configurable via `--key-renew-period`; we keep the default).
+Old keys remain in the cluster as inactive Secrets labelled
+`sealedsecrets.bitnami.com/sealed-secrets-key`, so previously sealed
+payloads keep decrypting indefinitely.
+
+**Do not delete old key Secrets thinking they're stale** — that
+breaks every SealedSecret sealed against them.
+
+### Uninstall
+
+```bash
+just sealed-secrets-uninstall
+```
+
+Runs `helm uninstall sealed-secrets -n sealed-secrets` and
+`kubectl delete namespace sealed-secrets --ignore-not-found`. Safe to
+re-run when nothing is installed.
+
+> **WARNING: back up the keys before uninstall.** Deleting the
+> namespace also deletes the controller's private keys, and ALL
+> existing SealedSecrets in the cluster become un-decryptable. If
+> you have SealedSecrets you want to keep, back the keys up first:
+>
+> ```bash
+> kubectl get secret -n sealed-secrets \
+>   -l sealedsecrets.bitnami.com/sealed-secrets-key \
+>   -o yaml > sealed-secrets-keys-backup.yaml
+> ```
+>
+> Re-applying that file before the next install restores the decrypt
+> ability. For a fresh-cluster rebuild without backup, you must re-seal
+> your manifests from plaintext against the new controller's public
+> key.
 
 ---
 

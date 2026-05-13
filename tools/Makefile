@@ -47,6 +47,7 @@ test: test-cluster.newt
 test: test-cluster.ingress-nginx
 test: test-cluster.metrics-server
 test: test-cluster.local-path-provisioner
+test: test-cluster.sealed-secrets
 test: test-ops.cluster-shell-from-anywhere
 
 # ---------------------------------------------------------------------------
@@ -196,7 +197,8 @@ test-bootstrap.config-scheme:
 		          CLUSTER_ISSUER_NAME CERT_MANAGER_CHART_VERSION \
 		          PANGOLIN_ENDPOINT NEWT_ID NEWT_SECRET NEWT_IMAGE_TAG \
 		          INGRESS_NGINX_CHART_VERSION INGRESS_LB_IP INGRESS_DEFAULT_TLS_SECRET \
-		          METRICS_SERVER_CHART_VERSION LOCAL_PATH_PROVISIONER_VERSION" ; \
+		          METRICS_SERVER_CHART_VERSION LOCAL_PATH_PROVISIONER_VERSION \
+		          SEALED_SECRETS_CHART_VERSION" ; \
 		test -f "$(TOOLS_DIR)/.env.example" \
 		  || { echo "    [FAIL] tools/.env.example missing" >&2 ; exit 1 ; } ; \
 		for k in $$required ; do \
@@ -1338,3 +1340,122 @@ test-cluster.local-path-provisioner:
 		  || { echo "    [FAIL] README.md does not reference just local-path-install" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] cluster.local-path-provisioner"
+
+# ---------------------------------------------------------------------------
+# cluster.sealed-secrets
+# ---------------------------------------------------------------------------
+# Offline structural assertions for the bitnami-labs/sealed-secrets install.
+# Verifies:
+#   - tools/cluster/sealed-secrets/{install,uninstall,smoke}.sh exist, are
+#     executable, have the bash shebang on line 1, and the TOOLS_DIR preamble
+#     within the first 5 lines.
+#   - helm-values.yaml pins image.tag: v0.34.0 and the restricted-PSA-compatible
+#     security context (runAsNonRoot, runAsUser 1001, readOnlyRootFilesystem,
+#     allowPrivilegeEscalation false, capabilities.drop: [ALL]) on both pod
+#     and container level; metrics.serviceMonitor.enabled: false.
+#   - install.sh references helm upgrade --install sealed-secrets
+#     sealed-secrets/sealed-secrets, the bitnami-labs repo URL, --wait, the
+#     namespace's restricted PSA enforcement, and the chart-version.txt drift
+#     warning.
+#   - smoke.sh references helm status sealed-secrets and the rollout status
+#     wait.
+#   - uninstall.sh references helm uninstall sealed-secrets, the safe-on-empty
+#     pattern, and kubectl delete namespace.
+#   - chart-version.txt matches ^[0-9]+\.[0-9]+\.[0-9]+$ (NO v-prefix).
+#   - tools/.env.example declares SEALED_SECRETS_CHART_VERSION=<bare semver>.
+#   - tools/Justfile has the three [no-cd] recipes: sealed-secrets-install,
+#     sealed-secrets-smoke, sealed-secrets-uninstall; install and smoke
+#     depend on env-check.
+#   - tools/docs/INIT-CLUSTER.md covers sealed-secrets-install, kubeseal,
+#     key auto-rotation, and the back-up-before-uninstall warning.
+#   - top-level README.md references just sealed-secrets-install.
+.PHONY: test-cluster.sealed-secrets
+test-cluster.sealed-secrets:
+	@echo "==> cluster.sealed-secrets"
+	@$(NIX_DEV) bash -c '\
+		set -eu ; \
+		export TOOLS_DIR="$(TOOLS_DIR)" ; \
+		ASSETS="$(TOOLS_DIR)/cluster/sealed-secrets" ; \
+		for f in install.sh uninstall.sh smoke.sh ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		  test -x "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f not executable" >&2 ; exit 1 ; } ; \
+		  head -1 "$$ASSETS/$$f" | grep -q "^#!/usr/bin/env bash" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing bash shebang on line 1" >&2 ; exit 1 ; } ; \
+		  head -5 "$$ASSETS/$$f" | grep -qE "\\\$$\\{TOOLS_DIR:\\?" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing TOOLS_DIR preamble in first 5 lines" >&2 ; exit 1 ; } ; \
+		done ; \
+		for f in helm-values.yaml chart-version.txt ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -q "helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets" >&2 ; exit 1 ; } ; \
+		grep -q "bitnami-labs.github.io/sealed-secrets" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing helm repo URL https://bitnami-labs.github.io/sealed-secrets" >&2 ; exit 1 ; } ; \
+		grep -q -- "--wait" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh helm upgrade missing --wait" >&2 ; exit 1 ; } ; \
+		grep -q "pod-security.kubernetes.io/enforce: restricted" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing namespace restricted PSA enforcement label" >&2 ; exit 1 ; } ; \
+		grep -q "chart-version.txt" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing chart-version.txt drift warning" >&2 ; exit 1 ; } ; \
+		grep -A2 "^image:" "$$ASSETS/helm-values.yaml" | grep -qE "tag:[[:space:]]+v0.34.0" \
+		  || { echo "    [FAIL] helm-values.yaml missing image.tag: v0.34.0 (must be within 2 lines of the image: key)" >&2 ; exit 1 ; } ; \
+		grep -q "runAsNonRoot: true" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing runAsNonRoot: true" >&2 ; exit 1 ; } ; \
+		grep -qE "runAsUser:[[:space:]]+1001" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing runAsUser: 1001 (the upstream image runs as uid 1001)" >&2 ; exit 1 ; } ; \
+		grep -q "readOnlyRootFilesystem: true" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing readOnlyRootFilesystem: true" >&2 ; exit 1 ; } ; \
+		grep -q "allowPrivilegeEscalation: false" "$$ASSETS/helm-values.yaml" \
+		  || { echo "    [FAIL] helm-values.yaml missing allowPrivilegeEscalation: false" >&2 ; exit 1 ; } ; \
+		grep -A2 -E "drop:[[:space:]]*$$" "$$ASSETS/helm-values.yaml" | grep -qE -- "-[[:space:]]*ALL" \
+		  || { echo "    [FAIL] helm-values.yaml missing capabilities.drop: [ALL]" >&2 ; exit 1 ; } ; \
+		seccomp_count=$$(grep -cE "type:[[:space:]]*RuntimeDefault" "$$ASSETS/helm-values.yaml") ; \
+		[ "$$seccomp_count" -ge 2 ] \
+		  || { echo "    [FAIL] helm-values.yaml needs RuntimeDefault seccomp on BOTH pod- and container-level securityContext (found $$seccomp_count occurrences, need >=2)" >&2 ; exit 1 ; } ; \
+		grep -A2 "^[[:space:]]*serviceMonitor:" "$$ASSETS/helm-values.yaml" | grep -qE "enabled:[[:space:]]+false" \
+		  || { echo "    [FAIL] helm-values.yaml missing metrics.serviceMonitor.enabled: false" >&2 ; exit 1 ; } ; \
+		grep -q "helm" "$$ASSETS/smoke.sh" && grep -q "status sealed-secrets" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing helm status sealed-secrets" >&2 ; exit 1 ; } ; \
+		grep -q "rollout status deployment/sealed-secrets" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing rollout status deployment/sealed-secrets" >&2 ; exit 1 ; } ; \
+		grep -q "helm uninstall sealed-secrets" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh missing helm uninstall sealed-secrets" >&2 ; exit 1 ; } ; \
+		grep -q "2>/dev/null || true" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh missing the safe-on-empty 2>/dev/null || true pattern after helm uninstall" >&2 ; exit 1 ; } ; \
+		grep -q "kubectl delete namespace sealed-secrets" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh missing kubectl delete namespace sealed-secrets" >&2 ; exit 1 ; } ; \
+		grep -q -- "--ignore-not-found" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh missing --ignore-not-found on the namespace delete" >&2 ; exit 1 ; } ; \
+		ver=$$(tr -d "[:space:]" < "$$ASSETS/chart-version.txt") ; \
+		echo "$$ver" | grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$$" \
+		  || { echo "    [FAIL] chart-version.txt does not match ^[0-9]+\\.[0-9]+\\.[0-9]+\$$ (got: $$ver; note: NO v prefix — the bitnami-labs chart uses bare semver)" >&2 ; exit 1 ; } ; \
+		grep -qE "^SEALED_SECRETS_CHART_VERSION=[0-9]+\.[0-9]+\.[0-9]+" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing SEALED_SECRETS_CHART_VERSION=<bare semver>" >&2 ; exit 1 ; } ; \
+		for r in sealed-secrets-install sealed-secrets-smoke sealed-secrets-uninstall ; do \
+		  grep -qE "^$${r}:" "$(TOOLS_DIR)/Justfile" \
+		    || { echo "    [FAIL] Justfile lacks recipe: $$r" >&2 ; exit 1 ; } ; \
+		  prev_line=$$(grep -B1 "^$${r}:" "$(TOOLS_DIR)/Justfile" | head -1) ; \
+		  echo "$$prev_line" | grep -qE "^\[no-cd\]" \
+		    || { echo "    [FAIL] Justfile recipe $$r missing [no-cd] attribute on the line above" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -A4 "^sealed-secrets-install:" "$(TOOLS_DIR)/Justfile" | grep -q "env-check" \
+		  || { echo "    [FAIL] Justfile recipe sealed-secrets-install does not depend on env-check" >&2 ; exit 1 ; } ; \
+		grep -A4 "^sealed-secrets-smoke:" "$(TOOLS_DIR)/Justfile" | grep -q "env-check" \
+		  || { echo "    [FAIL] Justfile recipe sealed-secrets-smoke does not depend on env-check" >&2 ; exit 1 ; } ; \
+		grep -q "sealed-secrets-install" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing sealed-secrets-install recipe reference" >&2 ; exit 1 ; } ; \
+		grep -qi "kubeseal" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing kubeseal CLI workflow reference" >&2 ; exit 1 ; } ; \
+		grep -qi "controller-namespace=sealed-secrets" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing --controller-namespace=sealed-secrets in the kubeseal example" >&2 ; exit 1 ; } ; \
+		grep -qiE "30.day|rotat" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing key auto-rotation guidance (30-day default)" >&2 ; exit 1 ; } ; \
+		grep -qiE "back.?up.*key|backup.*key|backing up.*key" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing back-up-the-keys-before-uninstall warning" >&2 ; exit 1 ; } ; \
+		grep -q "just sealed-secrets-install" "$(REPO_ROOT)/README.md" \
+		  || { echo "    [FAIL] README.md does not reference just sealed-secrets-install" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] cluster.sealed-secrets"

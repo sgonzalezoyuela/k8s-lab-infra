@@ -199,3 +199,18 @@ local-path-smoke: env-check
 [no-cd]
 local-path-uninstall:
     "$TOOLS_DIR/cluster/local-path-provisioner/uninstall.sh"
+
+# Phase 2: install bitnami-labs/sealed-secrets controller (commit-encrypted Secrets workflow); namespace under restricted PSA. Idempotent.
+[no-cd]
+sealed-secrets-install: env-check
+    "$TOOLS_DIR/cluster/sealed-secrets/install.sh"
+
+# Phase 2: assert the sealed-secrets helm release is deployed and the controller Deployment is rolled out.
+[no-cd]
+sealed-secrets-smoke: env-check
+    "$TOOLS_DIR/cluster/sealed-secrets/smoke.sh"
+
+# Phase 2: remove the helm release AND the sealed-secrets namespace. WARNING: deletes the controller's private keys — back them up first if you have SealedSecrets to keep.
+[no-cd]
+sealed-secrets-uninstall:
+    "$TOOLS_DIR/cluster/sealed-secrets/uninstall.sh"

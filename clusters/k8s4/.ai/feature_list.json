@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-13T14:13:39.765Z",
-    "version": 43,
+    "updatedAt": "2026-05-13T16:52:53.487Z",
+    "version": 46,
     "tddMode": "recommended"
   },
   "features": [
@@ -383,6 +383,72 @@
       "companionFile": "ops.cluster-shell-from-anywhere.md",
       "createdAt": "2026-05-13T14:12:52.054Z",
       "updatedAt": "2026-05-13T14:13:39.765Z"
+    },
+    {
+      "id": "cluster.local-path-provisioner",
+      "description": "Install rancher/local-path-provisioner v0.0.31 with /var/local-path-provisioner host backing via a Talos kubelet extraMount; configure local-path as the cluster's default StorageClass.",
+      "module": "cluster",
+      "priority": 15,
+      "status": "implemented",
+      "acceptance": [
+        "tools/cluster/local-path-provisioner/{install.sh,uninstall.sh,smoke.sh,kustomization.yaml,version.txt} exist; *.sh are executable and start with #!/usr/bin/env bash shebang and the ${TOOLS_DIR:?...} preamble within the first 5 lines.",
+        "tools/cluster/local-path-provisioner/manifests/local-path-storage.yaml is the vendored upstream rancher/local-path-provisioner manifest, checked in verbatim from the LOCAL_PATH_PROVISIONER_VERSION tag (the file contains image: rancher/local-path-provisioner:v0.0.31 and the upstream-default ConfigMap named local-path-config).",
+        "tools/cluster/local-path-provisioner/kustomization.yaml references the vendored manifest as a resource, sets namespace: local-path-storage, and applies three patches: (a) Namespace local-path-storage gets pod-security.kubernetes.io/enforce: privileged (helper pods use hostPath); (b) ConfigMap local-path-config has data.config.json replaced so nodePathMap[0].paths equals [\"/var/local-path-provisioner\"]; (c) StorageClass local-path gets annotation storageclass.kubernetes.io/is-default-class: \"true\".",
+        "tools/talos/patches/cp.yaml.tpl AND tools/talos/patches/wk0.yaml.tpl each contain a machine.kubelet.extraMounts block with one entry: destination /var/local-path-provisioner, type bind, source /var/local-path-provisioner, options [bind, rshared, rw].",
+        "tools/talos/scripts/gen-config.sh renders the new extraMounts into _out/cp.yaml and _out/wk0.yaml without re-rendering _out/secrets.yaml (idempotence preserved); both resulting machine configs still pass talosctl validate --mode metal.",
+        "tools/.env.example declares LOCAL_PATH_PROVISIONER_VERSION=v0.0.31 (the v-prefix is intentional — rancher tags use it; matches version.txt). test-bootstrap.config-scheme's required-vars list is extended with LOCAL_PATH_PROVISIONER_VERSION.",
+        "tools/Justfile exposes three [no-cd] recipes: local-path-install, local-path-smoke, local-path-uninstall. Install and smoke depend on env-check.",
+        "install.sh runs kubectl apply -k against the overlay; waits for deployment/local-path-provisioner -n local-path-storage rollout (<=2 min); asserts the StorageClass local-path carries storageclass.kubernetes.io/is-default-class: \"true\" via jsonpath; emits a stderr drift warning when .env LOCAL_PATH_PROVISIONER_VERSION differs from version.txt (and uses the .env value).",
+        "Re-running just local-path-install against an already-installed cluster is a no-op: kubectl apply --server-side reports unchanged for every resource in the overlay.",
+        "just local-path-uninstall runs kubectl delete -k against the overlay with --ignore-not-found; safe to re-run when nothing is installed; does NOT remove host directories (operator hygiene).",
+        "just local-path-smoke creates a 1Gi PVC lpp-smoke-test and a one-shot Pod that writes-then-reads a file under the volume in namespace default; waits <=60s for Pod phase=Succeeded; cleans up PVC + Pod on exit. The recipe fails fast if the PVC binds to a different StorageClass or the Pod never schedules.",
+        "tools/Makefile has a new test-cluster.local-path-provisioner target wired into the top-level test: aggregator. Offline structural assertions: file presence + executable + preamble; install.sh references kubectl apply -k, local-path-storage, rollout status, is-default-class, version.txt drift; kustomization.yaml references the vendored manifest path and lists the three patches (privileged PSA label on the namespace, ConfigMap path patch, default-class annotation on the StorageClass); both tools/talos/patches/cp.yaml.tpl and tools/talos/patches/wk0.yaml.tpl contain /var/local-path-provisioner, the literal rshared option, and the bind option; version.txt matches ^v[0-9]+\\.[0-9]+\\.[0-9]+$ (with v-prefix); .env.example has ^LOCAL_PATH_PROVISIONER_VERSION=v[0-9]+\\.[0-9]+\\.[0-9]+; Justfile has the three recipes each preceded by [no-cd].",
+        "tools/docs/INIT-CLUSTER.md Phase 2 gains a 'local-path-provisioner' subsection: prerequisites (fresh Talos config picking up the new extraMount — existing clusters need rebuild), the three recipes, what it enables (default local-path StorageClass, WaitForFirstConsumer binding, RWO node-local storage), the kubelet extraMount rationale, and the future Longhorn handoff note. Configuration table extended with LOCAL_PATH_PROVISIONER_VERSION.",
+        "README.md (top-level) references just local-path-install in the per-cluster Phase 2 workflow snippet; clarifies it is independent of all other Phase 2 services and NOT part of cluster-up.",
+        "clusters/k8s4/.env is updated with LOCAL_PATH_PROVISIONER_VERSION=v0.0.31 so just env-check continues to pass.",
+        "All existing structural tests still pass when run as npm test from clusters/k8s4/. The new test-cluster.local-path-provisioner is part of that run."
+      ],
+      "dependsOn": [
+        "talos.machine-configs",
+        "talos.bootstrap-cluster",
+        "bootstrap.split-tools-and-clusters"
+      ],
+      "notes": "Vendored upstream raw manifest (no Helm chart available) plus a tiny kustomize overlay (namespace privileged-PSA label, ConfigMap path -> /var/local-path-provisioner, StorageClass default annotation). The kubelet extraMount lives in the shared Talos patches so every new cluster gets it on bootstrap. Live k8s4 migration is out of scope per user Q7 = defer (user is rebuilding). Smoke is PVC + Pod that writes-then-reads (WaitForFirstConsumer requires a Pod to bind, so a status-only check would be insufficient). Default-class annotation is the lab convenience; Longhorn's future feature flips it.",
+      "version": 1,
+      "companionFile": "cluster.local-path-provisioner.md",
+      "createdAt": "2026-05-13T16:36:39.186Z",
+      "updatedAt": "2026-05-13T16:52:53.487Z"
+    },
+    {
+      "id": "cluster.sealed-secrets",
+      "description": "Install bitnami-labs/sealed-secrets chart 2.18.4 (controller v0.34.0) in a dedicated sealed-secrets namespace with restricted PSA; controller auto-generates its sealing keypair on first start.",
+      "module": "cluster",
+      "priority": 16,
+      "status": "failing",
+      "acceptance": [
+        "tools/cluster/sealed-secrets/{install.sh,uninstall.sh,smoke.sh,helm-values.yaml,chart-version.txt} exist; *.sh are executable and start with #!/usr/bin/env bash shebang and the ${TOOLS_DIR:?...} preamble within the first 5 lines.",
+        "chart-version.txt matches ^[0-9]+\\.[0-9]+\\.[0-9]+$ (no v-prefix; the bitnami-labs chart uses bare semver). Default pin: 2.18.4 (controller app v0.34.0).",
+        "tools/.env.example declares SEALED_SECRETS_CHART_VERSION=2.18.4 (matches chart-version.txt). test-bootstrap.config-scheme's required-vars list is extended with SEALED_SECRETS_CHART_VERSION.",
+        "tools/Justfile exposes three [no-cd] recipes: sealed-secrets-install, sealed-secrets-smoke, sealed-secrets-uninstall. Install and smoke depend on env-check.",
+        "install.sh pre-creates Namespace/sealed-secrets server-side with pod-security.kubernetes.io/enforce: restricted (labels persist if helm later reconciles the ns); helm repo adds from https://bitnami-labs.github.io/sealed-secrets; helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets in that namespace with --version, helm-values.yaml, and --wait; emits a stderr drift warning when .env SEALED_SECRETS_CHART_VERSION differs from chart-version.txt (and uses the .env value).",
+        "helm-values.yaml pins: image.tag: v0.34.0 (explicit so a chart bump can't silently change controller app version); pod-level securityContext.runAsNonRoot: true + seccompProfile.type: RuntimeDefault; container-level containerSecurityContext.runAsNonRoot: true, runAsUser: 1001, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities.drop: [ALL], seccompProfile.type: RuntimeDefault; metrics.serviceMonitor.enabled: false.",
+        "Re-running just sealed-secrets-install against an already-installed cluster is a no-op: helm upgrade --install keeps revision/chart version stable.",
+        "just sealed-secrets-uninstall runs helm uninstall sealed-secrets -n sealed-secrets 2>/dev/null || true then kubectl delete namespace sealed-secrets --ignore-not-found; safe to re-run when nothing is installed.",
+        "just sealed-secrets-smoke runs helm -n sealed-secrets status sealed-secrets and kubectl -n sealed-secrets rollout status deployment/sealed-secrets --timeout=60s. No end-to-end seal/unseal probe — that belongs to a future ops.smoke-test feature.",
+        "tools/Makefile has a new test-cluster.sealed-secrets target wired into the top-level test: aggregator. Offline structural assertions: file presence + executable + preamble; install.sh references helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets, bitnami-labs.github.io/sealed-secrets, --wait, pod-security.kubernetes.io/enforce: restricted, chart-version.txt drift; helm-values.yaml has image: followed within 2 lines by tag: v0.34.0, runAsNonRoot: true, runAsUser: 1001, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities.drop: followed by - ALL, serviceMonitor: with enabled: false; smoke.sh references helm status sealed-secrets and rollout status deployment/sealed-secrets; chart-version.txt matches ^[0-9]+\\.[0-9]+\\.[0-9]+$; .env.example has ^SEALED_SECRETS_CHART_VERSION=[0-9]+\\.[0-9]+\\.[0-9]+; Justfile has the three recipes each preceded by [no-cd].",
+        "tools/docs/INIT-CLUSTER.md Phase 2 gains a 'sealed-secrets' subsection: prerequisites (working cluster only), the three recipes, what it enables (commit-encrypted-Secrets workflow), the kubeseal CLI invocation example (using --controller-namespace=sealed-secrets), key auto-rotation guidance (30-day default; old keys retained so old SealedSecrets keep decrypting), and an explicit 'back up the keys before uninstall' warning (uninstall deletes the namespace which deletes the keys). Configuration table extended with SEALED_SECRETS_CHART_VERSION.",
+        "README.md (top-level) references just sealed-secrets-install in the per-cluster Phase 2 workflow snippet; clarifies it is independent of all other Phase 2 services and NOT part of cluster-up.",
+        "clusters/k8s4/.env is updated with SEALED_SECRETS_CHART_VERSION=2.18.4 so just env-check continues to pass.",
+        "All existing structural tests still pass when run as npm test from clusters/k8s4/. The new test-cluster.sealed-secrets is part of that run."
+      ],
+      "dependsOn": [
+        "talos.bootstrap-cluster",
+        "bootstrap.split-tools-and-clusters"
+      ],
+      "notes": "Bitnami-labs sealed-secrets (the maintainers' org; not bitnami/charts), chart 2.18.4 bundling controller v0.34.0. Dedicated sealed-secrets namespace under restricted PSA (avoids the kube-system labelling race with Talos's system-namespaces controller, same rationale as metallb-system). Key auto-generation per cluster (Q4 default); operator-supplied keys deferred. Minimal smoke (helm status + rollout status), no full seal/unseal cycle here — that belongs in a future ops.smoke-test feature. kubeseal CLI is already in the devShell.",
+      "version": 1,
+      "companionFile": "cluster.sealed-secrets.md",
+      "createdAt": "2026-05-13T16:36:53.937Z"
     }
   ]
 }

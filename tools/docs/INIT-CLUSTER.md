@@ -238,6 +238,7 @@ Talos patches, Helm values) is rendered from it.
 | `INGRESS_LB_IP` | Phase 2: LoadBalancer IP pinned to the ingress-nginx controller Service. **Must be inside `${METALLB_RANGE}`**; `ingress-install` fails fast otherwise. The recommended pattern is to reserve a stable IP near the bottom of the pool (e.g. `10.4.200.10`) and point your wildcard DNS at it. |
 | `INGRESS_DEFAULT_TLS_SECRET` | Phase 2: name of both the cert-manager `Certificate` and the resulting `Secret` in the `ingress-nginx` namespace. Default `ingress-default-tls`. Wired into the controller via `controller.extraArgs.default-ssl-certificate=ingress-nginx/$INGRESS_DEFAULT_TLS_SECRET` so unmatched-SNI clients still get a valid handshake against `*.${CLUSTER_DOMAIN}`. |
 | `METRICS_SERVER_CHART_VERSION` | Phase 2: pinned `kubernetes-sigs/metrics-server` Helm chart version (e.g. `3.13.0`). **No `v` prefix** (matches MetalLB/ingress-nginx, differs from cert-manager). The bundled default lives at `tools/cluster/metrics-server/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
+| `LOCAL_PATH_PROVISIONER_VERSION` | Phase 2: pinned `rancher/local-path-provisioner` upstream tag (e.g. `v0.0.31`). **`v` prefix is REQUIRED** — rancher tags use it (different from the Helm-chart entries above). The bundled default lives at `tools/cluster/local-path-provisioner/version.txt`; if `.env` differs, the install script warns and uses the `.env` value. Bumping requires re-vendoring `manifests/local-path-storage.yaml` from the new tag. |
 
 ---
 
@@ -775,6 +776,174 @@ spec:
 within 30–60s of creation (one scrape window). This stack does not
 ship a custom-metrics adapter; HPAs targeting non-resource metrics
 (Prometheus, custom application metrics) are out of scope.
+
+---
+
+## Phase 2: local-path-provisioner
+
+Phase 2 is **opt-in** and **not part of `just cluster-up`**.
+[rancher/local-path-provisioner](https://github.com/rancher/local-path-provisioner)
+gives the cluster a dynamic `StorageClass` (`local-path`) backed by a
+host directory on whichever node a Pod schedules to. It is the
+minimum-viable answer to "I want a PVC to actually bind" on a fresh
+Talos cluster — without it, every PVC sits `Pending` forever because
+Talos exposes no general-purpose `StorageClass` out of the box.
+
+This recipe is **independent of every other Phase 2 service** — it
+does not depend on MetalLB, cert-manager, ingress-nginx, metrics-server,
+or newt, and nothing else depends on it. The chosen
+`reclaimPolicy: Delete` and `volumeBindingMode: WaitForFirstConsumer`
+are the upstream defaults; we keep them.
+
+The future Longhorn install (replicated block storage) is expected to
+flip `local-path`'s default-class annotation off and take over as the
+cluster default. Until then, `local-path` is the only class on the
+cluster and a PVC with no explicit `storageClassName` lands there.
+
+### Prerequisites
+
+- A working cluster (`just cluster-up` finished and `kubectl get nodes`
+  is green) **whose Talos machine configs include the
+  `/var/local-path-provisioner` kubelet `extraMount`**. The mount lives
+  in the shared `tools/talos/patches/{cp,wk0}.yaml.tpl` templates, so
+  every newly bootstrapped cluster picks it up automatically. **Existing
+  clusters that were bootstrapped before the mount landed need a
+  rebuild** — `just talos-config`, re-snippet, re-apply machine
+  configs, and reboot the nodes — for the helper pods to find a real
+  host filesystem at `/var/local-path-provisioner`.
+- `KUBECONFIG` exported (the cluster `nix develop` shell does this; if
+  you bypassed it, run `just kubeconfig`).
+- `.env` contains `LOCAL_PATH_PROVISIONER_VERSION` (default `v0.0.31`,
+  the `v` prefix is intentional — rancher tags use it).
+
+### Install
+
+```bash
+just local-path-install
+```
+
+The recipe applies a small kustomize overlay over the vendored upstream
+manifest at `tools/cluster/local-path-provisioner/manifests/local-path-storage.yaml`:
+
+1. `kubectl apply -k tools/cluster/local-path-provisioner/ --server-side`
+   creates `Namespace/local-path-storage` (labelled
+   `pod-security.kubernetes.io/enforce: privileged` — helper pods use
+   `hostPath`, which restricted/baseline PSA forbid), the controller
+   `Deployment`, its RBAC, the `ConfigMap` with `nodePathMap` pointing
+   at `/var/local-path-provisioner`, and `StorageClass/local-path`
+   annotated `storageclass.kubernetes.io/is-default-class: "true"`.
+2. Waits ≤2 min for `deployment/local-path-provisioner` to roll out.
+3. Sanity-checks that the `local-path` `StorageClass` actually carries
+   the default-class annotation. PVCs that omit `storageClassName`
+   would silently sit `Pending` if it didn't.
+
+The recipe is idempotent: server-side apply reports `unchanged` for
+every resource on a re-run, and the host directory contents (existing
+PVs) are untouched.
+
+### Talos kubelet `extraMount` rationale
+
+The kubelet on Talos runs in its own container. A `hostPath` volume on
+a Pod scheduled by the kubelet sees the kubelet container's filesystem
+view, **not** the host's. local-path-provisioner's helper Pods
+(short-lived workers that `mkdir`/`rmdir` the per-PV directories)
+therefore need their `hostPath` to be a *real* host mount, not the
+kubelet container's overlay layer.
+
+The shared `tools/talos/patches/{cp,wk0}.yaml.tpl` solve that with one
+`machine.kubelet.extraMounts` entry:
+
+```yaml
+machine:
+  kubelet:
+    extraMounts:
+      - destination: /var/local-path-provisioner
+        type: bind
+        source: /var/local-path-provisioner
+        options:
+          - bind
+          - rshared
+          - rw
+```
+
+`/var/local-path-provisioner` lives under `/var` (the FHS-blessed home
+for variable runtime state, and a writable Talos partition) rather
+than the upstream `/opt` default. `rshared` is the standard "this is
+a real host mount" idiom — any sub-mounts the provisioner creates
+later propagate in both directions between host and kubelet container.
+Talos auto-creates the source directory on first kubelet start if
+missing.
+
+### Verify
+
+```bash
+kubectl get storageclass
+# NAME                   PROVISIONER             RECLAIMPOLICY   VOLUMEBINDINGMODE      AGE
+# local-path (default)   rancher.io/local-path   Delete          WaitForFirstConsumer   30s
+
+kubectl -n local-path-storage get pods
+# NAME                                      READY   STATUS    RESTARTS   AGE
+# local-path-provisioner-...                1/1     Running   0          30s
+```
+
+### Smoke
+
+```bash
+just local-path-smoke
+```
+
+This creates a 1Gi PVC `lpp-smoke-test` and a one-shot Pod that mounts
+it, writes `ok` to `/data/ok`, reads it back, and exits 0. The recipe
+waits ≤60s for the Pod to reach `Succeeded`, and cleans up the PVC +
+Pod on exit. It is intentionally a *write-then-read* smoke and not a
+status-only check: `WaitForFirstConsumer` binding mode means the PVC
+only binds once a Pod schedules, so "PVC.status.phase == Bound" is
+insufficient to prove the provisioner actually works.
+
+If the Pod stalls at `Pending`, the most likely cause is that the
+kubelet `extraMount` is missing on the node it scheduled to — see
+"Prerequisites" above.
+
+### What this enables
+
+- **Default `local-path` StorageClass.** PVCs that omit
+  `storageClassName` bind here.
+- **`WaitForFirstConsumer` binding.** PVCs wait until a Pod schedules
+  so the provisioner can pick the right node. (Side effect: a fresh
+  `kubectl get pvc` shows `Pending`; this is normal and not a bug.)
+- **RWO node-local storage.** A Pod can be re-scheduled to a different
+  node, but its data does NOT migrate — local-path-provisioner is
+  intentionally node-affine. Workloads that need replicated storage
+  should wait for the upcoming Longhorn feature.
+
+### Uninstall
+
+```bash
+just local-path-uninstall
+```
+
+Runs `kubectl delete -k ... --ignore-not-found`, which removes the
+`Namespace/local-path-storage` (cascading the Deployment, ConfigMap,
+helper RBAC), the cluster-scoped `StorageClass/local-path`, and the
+`ClusterRole`/`ClusterRoleBinding`. Safe to re-run when nothing is
+installed.
+
+The host directories under `/var/local-path-provisioner/` on each node
+are **deliberately left intact** — pre-existing PV data would orphan
+silently, and "the uninstall script just nuked production data" is a
+worse failure mode than a stale directory. If you want a clean slate
+on the host, that is one `talosctl -n <node> shell` + `rm -rf` away.
+
+### Future: Longhorn handoff
+
+When the planned Longhorn install lands, its feature is expected to:
+
+1. Flip `local-path`'s `is-default-class` annotation off.
+2. Install a Longhorn `StorageClass` and mark it default.
+
+Existing PVCs already bound to `local-path` PVs keep working as long
+as their Pods stay on the same node. New PVCs that want replicated
+storage and omit `storageClassName` will land on Longhorn instead.
 
 ---
 

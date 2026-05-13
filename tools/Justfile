@@ -184,3 +184,18 @@ metrics-smoke: env-check
 [no-cd]
 metrics-uninstall:
     "$TOOLS_DIR/cluster/metrics-server/uninstall.sh"
+
+# Phase 2: install rancher/local-path-provisioner with /var-backed PVs; sets local-path as the cluster default StorageClass (idempotent).
+[no-cd]
+local-path-install: env-check
+    "$TOOLS_DIR/cluster/local-path-provisioner/install.sh"
+
+# Phase 2: create a 1Gi PVC + one-shot Pod that writes-then-reads under the volume; asserts WaitForFirstConsumer binding works.
+[no-cd]
+local-path-smoke: env-check
+    "$TOOLS_DIR/cluster/local-path-provisioner/smoke.sh"
+
+# Phase 2: remove the overlay (namespace + StorageClass + RBAC). Host directories under /var/local-path-provisioner are left intact.
+[no-cd]
+local-path-uninstall:
+    "$TOOLS_DIR/cluster/local-path-provisioner/uninstall.sh"

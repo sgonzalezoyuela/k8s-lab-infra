@@ -61,6 +61,14 @@ just ingress-smoke
 # Independent of all other Phase-2 services and NOT part of `just cluster-up`.
 just metrics-install     # cluster metrics (kubectl top, HPA); independent of other phase-2 services
 just metrics-smoke
+
+# local-path-provisioner — node-local dynamic storage with /var-backed PVs,
+# installed as the cluster's default StorageClass. Requires a fresh Talos
+# config (the kubelet extraMount lives in tools/talos/patches/*); existing
+# clusters need a rebuild to pick it up. Independent of all other Phase-2
+# services and NOT part of `just cluster-up`.
+just local-path-install  # rancher/local-path-provisioner; default StorageClass
+just local-path-smoke
 ```
 
 The cluster's `nix develop` shell exports:

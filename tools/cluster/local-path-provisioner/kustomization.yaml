@@ -1,0 +1,56 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Vendored upstream rancher/local-path-provisioner manifest (pinned to the
+# tag in ../version.txt). Three overlay tweaks:
+#   1. Label the namespace `pod-security.kubernetes.io/enforce: privileged`
+#      because helper pods use hostPath (the controller itself is restricted-
+#      grade, but Talos's namespace-level PSA is what gates Pod admission).
+#   2. Replace ConfigMap/local-path-config's `config.json` so the provisioner
+#      backs PVs at /var/local-path-provisioner instead of /opt/...
+#      (matches the kubelet extraMount declared in tools/talos/patches/*).
+#   3. Annotate StorageClass/local-path as the cluster's default class.
+namespace: local-path-storage
+
+resources:
+  - manifests/local-path-storage.yaml
+
+patches:
+  # Patch 1: privileged-grade PSA on the namespace.
+  - target:
+      kind: Namespace
+      name: local-path-storage
+    patch: |-
+      - op: add
+        path: /metadata/labels
+        value:
+          pod-security.kubernetes.io/enforce: privileged
+          pod-security.kubernetes.io/audit: privileged
+          pod-security.kubernetes.io/warn: privileged
+
+  # Patch 2: point the provisioner at the Talos kubelet extraMount host path.
+  - target:
+      kind: ConfigMap
+      name: local-path-config
+    patch: |-
+      - op: replace
+        path: /data/config.json
+        value: |
+          {
+            "nodePathMap": [
+              {
+                "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
+                "paths": ["/var/local-path-provisioner"]
+              }
+            ]
+          }
+
+  # Patch 3: mark local-path as the default StorageClass.
+  - target:
+      kind: StorageClass
+      name: local-path
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          storageclass.kubernetes.io/is-default-class: "true"

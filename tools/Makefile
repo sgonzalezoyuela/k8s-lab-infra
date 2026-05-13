@@ -46,6 +46,7 @@ test: test-cluster.metallb
 test: test-cluster.newt
 test: test-cluster.ingress-nginx
 test: test-cluster.metrics-server
+test: test-cluster.local-path-provisioner
 test: test-ops.cluster-shell-from-anywhere
 
 # ---------------------------------------------------------------------------
@@ -195,7 +196,7 @@ test-bootstrap.config-scheme:
 		          CLUSTER_ISSUER_NAME CERT_MANAGER_CHART_VERSION \
 		          PANGOLIN_ENDPOINT NEWT_ID NEWT_SECRET NEWT_IMAGE_TAG \
 		          INGRESS_NGINX_CHART_VERSION INGRESS_LB_IP INGRESS_DEFAULT_TLS_SECRET \
-		          METRICS_SERVER_CHART_VERSION" ; \
+		          METRICS_SERVER_CHART_VERSION LOCAL_PATH_PROVISIONER_VERSION" ; \
 		test -f "$(TOOLS_DIR)/.env.example" \
 		  || { echo "    [FAIL] tools/.env.example missing" >&2 ; exit 1 ; } ; \
 		for k in $$required ; do \
@@ -1211,3 +1212,129 @@ test-cluster.metrics-server:
 		  || { echo "    [FAIL] README.md does not reference just metrics-install" >&2 ; exit 1 ; } ; \
 	'
 	@echo "    [PASS] cluster.metrics-server"
+
+# ---------------------------------------------------------------------------
+# cluster.local-path-provisioner
+# ---------------------------------------------------------------------------
+# Offline structural assertions for the rancher/local-path-provisioner overlay
+# and its Talos kubelet extraMount. Verifies:
+#   - tools/cluster/local-path-provisioner/{install,uninstall,smoke}.sh exist,
+#     are executable, have the bash shebang on line 1, and the TOOLS_DIR
+#     preamble within the first 5 lines.
+#   - manifests/local-path-storage.yaml is the vendored upstream YAML pinned
+#     to LOCAL_PATH_PROVISIONER_VERSION (the file contains the rancher image
+#     tag and the upstream ConfigMap named local-path-config).
+#   - kustomization.yaml references the vendored manifest as a resource, sets
+#     namespace local-path-storage, and contains the three patches:
+#       (a) Namespace privileged-PSA label
+#       (b) ConfigMap path override to /var/local-path-provisioner
+#       (c) StorageClass default-class annotation
+#   - install.sh references kubectl apply -k, local-path-storage namespace,
+#     rollout status, the is-default-class annotation assertion, and the
+#     version.txt drift warning.
+#   - tools/talos/patches/{cp,wk0}.yaml.tpl each contain a machine.kubelet
+#     extraMounts block with /var/local-path-provisioner, the bind type, and
+#     the rshared option.
+#   - version.txt matches ^v[0-9]+\.[0-9]+\.[0-9]+$ (with v-prefix).
+#   - tools/.env.example declares LOCAL_PATH_PROVISIONER_VERSION=<v-prefixed semver>.
+#   - tools/Justfile has the three [no-cd] recipes:
+#     local-path-install, local-path-smoke, local-path-uninstall; install and
+#     smoke depend on env-check.
+#   - tools/docs/INIT-CLUSTER.md covers local-path-install and local-path-provisioner.
+#   - top-level README.md references just local-path-install.
+.PHONY: test-cluster.local-path-provisioner
+test-cluster.local-path-provisioner:
+	@echo "==> cluster.local-path-provisioner"
+	@$(NIX_DEV) bash -c '\
+		set -eu ; \
+		export TOOLS_DIR="$(TOOLS_DIR)" ; \
+		ASSETS="$(TOOLS_DIR)/cluster/local-path-provisioner" ; \
+		for f in install.sh uninstall.sh smoke.sh ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		  test -x "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f not executable" >&2 ; exit 1 ; } ; \
+		  head -1 "$$ASSETS/$$f" | grep -q "^#!/usr/bin/env bash" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing bash shebang on line 1" >&2 ; exit 1 ; } ; \
+		  head -5 "$$ASSETS/$$f" | grep -qE "\\\$$\\{TOOLS_DIR:\\?" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing TOOLS_DIR preamble in first 5 lines" >&2 ; exit 1 ; } ; \
+		done ; \
+		for f in kustomization.yaml version.txt ; do \
+		  test -f "$$ASSETS/$$f" \
+		    || { echo "    [FAIL] $$ASSETS/$$f missing" >&2 ; exit 1 ; } ; \
+		done ; \
+		test -f "$$ASSETS/manifests/local-path-storage.yaml" \
+		  || { echo "    [FAIL] $$ASSETS/manifests/local-path-storage.yaml missing (vendored upstream manifest)" >&2 ; exit 1 ; } ; \
+		grep -q "image: rancher/local-path-provisioner:v0.0.31" "$$ASSETS/manifests/local-path-storage.yaml" \
+		  || { echo "    [FAIL] manifests/local-path-storage.yaml missing rancher/local-path-provisioner:v0.0.31 image (must match version.txt)" >&2 ; exit 1 ; } ; \
+		grep -qE "name:[[:space:]]+local-path-config" "$$ASSETS/manifests/local-path-storage.yaml" \
+		  || { echo "    [FAIL] manifests/local-path-storage.yaml missing ConfigMap local-path-config" >&2 ; exit 1 ; } ; \
+		grep -qE "^[[:space:]]*-[[:space:]]+manifests/local-path-storage.yaml" "$$ASSETS/kustomization.yaml" \
+		  || { echo "    [FAIL] kustomization.yaml does not reference manifests/local-path-storage.yaml as a resource" >&2 ; exit 1 ; } ; \
+		grep -qE "^namespace:[[:space:]]+local-path-storage" "$$ASSETS/kustomization.yaml" \
+		  || { echo "    [FAIL] kustomization.yaml missing namespace: local-path-storage" >&2 ; exit 1 ; } ; \
+		grep -q "pod-security.kubernetes.io/enforce: privileged" "$$ASSETS/kustomization.yaml" \
+		  || { echo "    [FAIL] kustomization.yaml missing namespace privileged-PSA label patch (helper pods use hostPath)" >&2 ; exit 1 ; } ; \
+		grep -q "/var/local-path-provisioner" "$$ASSETS/kustomization.yaml" \
+		  || { echo "    [FAIL] kustomization.yaml missing ConfigMap path override to /var/local-path-provisioner" >&2 ; exit 1 ; } ; \
+		grep -q "storageclass.kubernetes.io/is-default-class" "$$ASSETS/kustomization.yaml" \
+		  || { echo "    [FAIL] kustomization.yaml missing StorageClass default-class annotation patch" >&2 ; exit 1 ; } ; \
+		grep -q -- "kubectl apply -k" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing kubectl apply -k against the overlay" >&2 ; exit 1 ; } ; \
+		grep -q "local-path-storage" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing local-path-storage namespace" >&2 ; exit 1 ; } ; \
+		grep -q "rollout status" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing rollout status wait" >&2 ; exit 1 ; } ; \
+		grep -q "is-default-class" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing default-class annotation assertion" >&2 ; exit 1 ; } ; \
+		grep -q "version.txt" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing version.txt drift warning" >&2 ; exit 1 ; } ; \
+		grep -q -- "kubectl delete -k" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh missing kubectl delete -k against the overlay" >&2 ; exit 1 ; } ; \
+		grep -q -- "--ignore-not-found" "$$ASSETS/uninstall.sh" \
+		  || { echo "    [FAIL] uninstall.sh missing --ignore-not-found (must be safe to re-run when nothing is installed)" >&2 ; exit 1 ; } ; \
+		grep -q "lpp-smoke-test" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing lpp-smoke-test PVC/Pod name" >&2 ; exit 1 ; } ; \
+		grep -q "1Gi" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing 1Gi PVC size" >&2 ; exit 1 ; } ; \
+		grep -qE "phase[^=]*=Succeeded|Succeeded" "$$ASSETS/smoke.sh" \
+		  || { echo "    [FAIL] smoke.sh missing Pod phase=Succeeded wait" >&2 ; exit 1 ; } ; \
+		for tpl in cp.yaml.tpl wk0.yaml.tpl ; do \
+		  TPL="$(TOOLS_DIR)/talos/patches/$$tpl" ; \
+		  test -f "$$TPL" \
+		    || { echo "    [FAIL] $$TPL missing" >&2 ; exit 1 ; } ; \
+		  grep -q "extraMounts" "$$TPL" \
+		    || { echo "    [FAIL] $$TPL missing machine.kubelet.extraMounts block" >&2 ; exit 1 ; } ; \
+		  grep -q "/var/local-path-provisioner" "$$TPL" \
+		    || { echo "    [FAIL] $$TPL missing /var/local-path-provisioner mount path" >&2 ; exit 1 ; } ; \
+		  grep -q "rshared" "$$TPL" \
+		    || { echo "    [FAIL] $$TPL missing literal rshared mount option" >&2 ; exit 1 ; } ; \
+		  grep -qE "^[[:space:]]*-[[:space:]]+bind" "$$TPL" \
+		    || { echo "    [FAIL] $$TPL missing literal bind mount option" >&2 ; exit 1 ; } ; \
+		  grep -qE "type:[[:space:]]+bind" "$$TPL" \
+		    || { echo "    [FAIL] $$TPL missing type: bind in extraMounts entry" >&2 ; exit 1 ; } ; \
+		done ; \
+		ver=$$(tr -d "[:space:]" < "$$ASSETS/version.txt") ; \
+		echo "$$ver" | grep -qE "^v[0-9]+\.[0-9]+\.[0-9]+$$" \
+		  || { echo "    [FAIL] version.txt does not match ^v[0-9]+\\.[0-9]+\\.[0-9]+\$$ (got: $$ver; note: v-prefix REQUIRED, rancher tags use it)" >&2 ; exit 1 ; } ; \
+		grep -qE "^LOCAL_PATH_PROVISIONER_VERSION=v[0-9]+\.[0-9]+\.[0-9]+" "$(TOOLS_DIR)/.env.example" \
+		  || { echo "    [FAIL] .env.example missing LOCAL_PATH_PROVISIONER_VERSION=<v-prefixed semver>" >&2 ; exit 1 ; } ; \
+		for r in local-path-install local-path-smoke local-path-uninstall ; do \
+		  grep -qE "^$${r}:" "$(TOOLS_DIR)/Justfile" \
+		    || { echo "    [FAIL] Justfile lacks recipe: $$r" >&2 ; exit 1 ; } ; \
+		  prev_line=$$(grep -B1 "^$${r}:" "$(TOOLS_DIR)/Justfile" | head -1) ; \
+		  echo "$$prev_line" | grep -qE "^\[no-cd\]" \
+		    || { echo "    [FAIL] Justfile recipe $$r missing [no-cd] attribute on the line above" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -A4 "^local-path-install:" "$(TOOLS_DIR)/Justfile" | grep -q "env-check" \
+		  || { echo "    [FAIL] Justfile recipe local-path-install does not depend on env-check" >&2 ; exit 1 ; } ; \
+		grep -A4 "^local-path-smoke:" "$(TOOLS_DIR)/Justfile" | grep -q "env-check" \
+		  || { echo "    [FAIL] Justfile recipe local-path-smoke does not depend on env-check" >&2 ; exit 1 ; } ; \
+		grep -q "local-path-install" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing local-path-install recipe reference" >&2 ; exit 1 ; } ; \
+		grep -qi "local-path-provisioner" "$(TOOLS_DIR)/docs/INIT-CLUSTER.md" \
+		  || { echo "    [FAIL] INIT-CLUSTER.md missing local-path-provisioner coverage" >&2 ; exit 1 ; } ; \
+		grep -q "just local-path-install" "$(REPO_ROOT)/README.md" \
+		  || { echo "    [FAIL] README.md does not reference just local-path-install" >&2 ; exit 1 ; } ; \
+	'
+	@echo "    [PASS] cluster.local-path-provisioner"

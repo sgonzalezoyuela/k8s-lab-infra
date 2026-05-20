@@ -29,13 +29,13 @@ kubectl apply -f foo.sealed.yaml   # controller unseals → real Secret
 |---|---|---|
 | Helm chart | `sealed-secrets/sealed-secrets` | Upstream `bitnami-labs/sealed-secrets` (the maintainers' org). The bitnami-charts mirror exists but lags. |
 | Repo URL | `https://bitnami-labs.github.io/sealed-secrets` | Same as the chart's release artifacts. |
-| Chart version | `2.18.4` (pins controller app `v0.34.0`) | User-specified. The chart and the controller are versioned independently; chart 2.18.4 is the published release that ships controller v0.34.0. Bumping requires editing both `tools/cluster/sealed-secrets/chart-version.txt` and the per-cluster `.env`. |
+| Chart version | `2.18.5` (pins controller app `0.36.6`) | The chart and the controller are versioned independently; chart 2.18.5 is the published release that ships controller 0.36.6. Bumping requires editing both `tools/cluster/sealed-secrets/chart-version.txt` and the per-cluster `.env`. **Note**: appVersion 0.36.6 is bare semver (no `v` prefix) — the docker.io/bitnami/sealed-secrets-controller registry stopped using v-prefixed tags around appVersion 0.25.0 / chart 2.14.2. |
 | Namespace | `sealed-secrets` (dedicated) | Restricted-PSA-labelled. Chart default is `kube-system`; we deviate because: (a) PSA labels on `kube-system` race with Talos's system-namespaces controller (same rationale as metallb's `metallb-system`), (b) a dedicated ns lets us reason about RBAC + future NetworkPolicy without touching `kube-system`. |
 | PSA enforcement | `restricted` | Controller is fully restricted-compliant (the chart's defaults already are — we pin them in helm-values to make a future chart-default flip observable). |
 | Key management | Auto-generate per cluster | Q4 default. Controller generates an RSA-4096 keypair on first start, stores it as `Secret/sealed-secrets-keyXXXXX` (active key labelled). Operator backs up that Secret out-of-band if they care about cross-cluster decrypt. |
 | Smoke approach | Helm release deployed + Deployment rolled out | Minimal. No actual seal→unseal cycle (would need a live `kubeseal --fetch-cert` against the controller and a SealedSecret apply; that's a richer e2e test best left to a future `ops.smoke-test` feature). |
 | Metrics / ServiceMonitor | `false` | Observability stack not yet provisioned; pinning `false` prevents the chart from creating a ServiceMonitor that points nowhere. |
-| Image tag pin | `image.tag: v0.34.0` | Pinned in `helm-values.yaml` explicitly so a chart bump that updates its default tag is observable in our test diff. The chart honours this override. |
+| Image tag pin | `image.tag: 0.36.6` (BARE semver, no `v`) | Pinned in `helm-values.yaml` explicitly so a chart bump that updates its default tag is observable in our test diff. The chart honours this override. **CRITICAL**: a v-prefix here (`v0.36.6`) yields ErrImagePull because docker.io/bitnami/sealed-secrets-controller uses bare-semver tags. The structural test now rejects any `image.tag:` value matching `v[0-9]`. |
 
 ## Files added
 
@@ -45,12 +45,12 @@ tools/cluster/sealed-secrets/
 ├── uninstall.sh           helm uninstall + ns delete (idempotent)
 ├── smoke.sh               helm status + rollout status (no seal/unseal cycle)
 ├── helm-values.yaml       security context, image.tag pin, metrics off
-└── chart-version.txt      bundled-default chart version (2.18.4)
+└── chart-version.txt      bundled-default chart version (2.18.5)
 ```
 
 Edits:
 
-- `tools/.env.example` — declares `SEALED_SECRETS_CHART_VERSION=2.18.4`.
+- `tools/.env.example` — declares `SEALED_SECRETS_CHART_VERSION=2.18.5`.
 - `tools/Justfile` — three `[no-cd]` recipes: `sealed-secrets-install`,
   `sealed-secrets-smoke`, `sealed-secrets-uninstall`. Install/smoke
   depend on `env-check`.
@@ -61,16 +61,20 @@ Edits:
   install, verify, smoke, uninstall, kubeseal workflow, key-rotation
   guidance). Configuration table extended.
 - `README.md` — Phase 2 step in the per-cluster workflow snippet.
-- `clusters/k8s4/.env` — per-cluster pin `SEALED_SECRETS_CHART_VERSION=2.18.4`.
+- `clusters/k8s4/.env` — per-cluster pin `SEALED_SECRETS_CHART_VERSION=2.18.5`.
 
 ## helm-values.yaml outline
 
 ```yaml
-# Pinned image tag — the chart maps app v0.34.0 by default, but we pin
-# explicitly so a future chart bump can't silently change the controller
-# version without us noticing.
+# Pinned image tag — chart 2.18.5 ships appVersion 0.36.6 by default,
+# but we pin explicitly so a future chart bump can't silently change the
+# controller version without us noticing.
+#
+# Bare semver — NO v-prefix. The docker.io/bitnami/sealed-secrets-controller
+# registry uses bare-semver tags (e.g. 0.36.6, not v0.36.6). Using a
+# v-prefix yields ErrImagePull.
 image:
-  tag: v0.34.0
+  tag: 0.36.6
 
 # Restricted-PSA-compatible securityContext.
 # The controller runs as uid 1001 (the upstream image's non-root user),
@@ -251,7 +255,8 @@ kubectl -n sealed-secrets get secret -l sealedsecrets.bitnami.com/sealed-secrets
 |---|---|
 | Uninstall destroys keys; operator forgets to back up. | Documented loudly in INIT-CLUSTER and in this companion. `uninstall.sh` does NOT print a warning at runtime (it would slow down clean reinstalls); the documentation is the safety net. |
 | Chart version drift between `tools/cluster/sealed-secrets/chart-version.txt` and per-cluster `.env`. | install.sh emits `warn:` to stderr when they differ; `.env` always wins. Drift warning is structural-tested. |
-| Chart 2.x → 3.x bump (if it ever happens) flips controller defaults. | helm-values.yaml pins `image.tag: v0.34.0` explicitly. A chart that ignores `image.tag` is itself broken; a chart that uses it but bumps default elsewhere is caught by the structural assertions on the security context. |
+| Chart 2.x → 3.x bump (if it ever happens) flips controller defaults. | helm-values.yaml pins `image.tag: 0.36.6` explicitly (bare semver). A chart that ignores `image.tag` is itself broken; a chart that uses it but bumps default elsewhere is caught by the structural assertions on the security context. |
+| v-prefix accidentally re-introduced on `image.tag` (the bug we just fixed). | The structural test now rejects any `image.tag: v[0-9]` shape. The docker.io/bitnami/sealed-secrets-controller registry uses bare-semver tags exclusively since appVersion 0.25.0 (chart 2.14.2). |
 | `kubeseal` CLI version drift vs controller version. | The devShell pins kubeseal via nixpkgs (the cluster flake's nixpkgs rev). Major drift is rare; minor drift between kubeseal 0.2x and controller 0.34 is harmless (the seal format is stable). |
 | 30-day auto-rotation surprises an operator who deletes "old" Secrets thinking they're stale. | Documented in Key Management above. Old key Secrets MUST be kept for old SealedSecrets to keep decrypting. |
 | Restricted PSA on the namespace might block a future feature that wants to deploy a sidecar to the controller. | The controller is a single Deployment with no sidecar requirements. If a future feature wants something more, it gets its own namespace. |

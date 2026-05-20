@@ -37,6 +37,36 @@ metadata:
     pod-security.kubernetes.io/warn: restricted
 EOF
 
+# Adopt any pre-existing cluster-scoped sealed-secrets resources into this
+# Helm release. Happens when a previous install used the upstream raw
+# manifest (kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/
+# releases/download/.../controller.yaml) or any other non-Helm path: the
+# cluster-scoped resources (ClusterRole, ClusterRoleBinding, CRD) persist
+# regardless of what we do in our own namespace, and the next
+# `helm upgrade --install` refuses with "invalid ownership metadata"
+# (missing app.kubernetes.io/managed-by=Helm + meta.helm.sh/release-* on
+# the existing object). We add those labels/annotations so Helm claims
+# them cleanly on the next upgrade.
+#
+# Idempotent on first install (the resources don't exist, kubectl get
+# returns non-zero, we skip). Idempotent on Helm-owned reinstalls (the
+# labels are already there; --overwrite is a no-op write).
+#
+# Resource list: chart-cluster-scoped names that collide with the upstream
+# raw manifest. If a future chart bump introduces another cluster-scoped
+# resource, add an `adopt` line below.
+adopt() {
+  local kind="$1" name="$2"
+  if kubectl get "$kind" "$name" >/dev/null 2>&1; then
+    kubectl label    "$kind" "$name" "app.kubernetes.io/managed-by=Helm"                       --overwrite >/dev/null
+    kubectl annotate "$kind" "$name" "meta.helm.sh/release-name=sealed-secrets"                --overwrite >/dev/null
+    kubectl annotate "$kind" "$name" "meta.helm.sh/release-namespace=$NS"                      --overwrite >/dev/null
+  fi
+}
+adopt clusterrole         secrets-unsealer
+adopt clusterrolebinding  sealed-secrets-unsealer
+adopt customresourcedefinition sealedsecrets.bitnami.com
+
 # Upstream repo (bitnami-labs/sealed-secrets — the maintainers' org; the
 # bitnami-charts mirror exists but lags). --force-update keeps the index
 # current across re-runs.

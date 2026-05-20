@@ -1,9 +1,15 @@
-# Pinned controller image tag. Chart 2.18.4 ships app v0.34.0 by default;
+# Pinned controller image tag. Chart 2.18.5 ships app 0.36.6 by default;
 # pinning the tag here makes a future chart bump that changes its default
 # observable in our test diff (rather than silently shipping a new controller
 # version on the next `helm upgrade`).
+#
+# IMPORTANT: the tag has NO v-prefix. The image at
+# docker.io/bitnami/sealed-secrets-controller uses bare-semver tags
+# (e.g. 0.36.6, not v0.36.6). The upstream sealed-secrets project
+# switched from v-prefixed to bare-semver tags around appVersion 0.25.0
+# (chart 2.14.2). Using `v0.36.6` here yields ErrImagePull.
 image:
-  tag: v0.34.0
+  tag: 0.36.6
 
 # Pod-level securityContext. Restricted-PSA compliant.
 # The chart's defaults are already safe; pinning makes a chart-default flip

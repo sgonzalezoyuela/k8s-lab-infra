@@ -239,7 +239,7 @@ Talos patches, Helm values) is rendered from it.
 | `INGRESS_DEFAULT_TLS_SECRET` | Phase 2: name of both the cert-manager `Certificate` and the resulting `Secret` in the `ingress-nginx` namespace. Default `ingress-default-tls`. Wired into the controller via `controller.extraArgs.default-ssl-certificate=ingress-nginx/$INGRESS_DEFAULT_TLS_SECRET` so unmatched-SNI clients still get a valid handshake against `*.${CLUSTER_DOMAIN}`. |
 | `METRICS_SERVER_CHART_VERSION` | Phase 2: pinned `kubernetes-sigs/metrics-server` Helm chart version (e.g. `3.13.0`). **No `v` prefix** (matches MetalLB/ingress-nginx, differs from cert-manager). The bundled default lives at `tools/cluster/metrics-server/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 | `LOCAL_PATH_PROVISIONER_VERSION` | Phase 2: pinned `rancher/local-path-provisioner` upstream tag (e.g. `v0.0.31`). **`v` prefix is REQUIRED** — rancher tags use it (different from the Helm-chart entries above). The bundled default lives at `tools/cluster/local-path-provisioner/version.txt`; if `.env` differs, the install script warns and uses the `.env` value. Bumping requires re-vendoring `manifests/local-path-storage.yaml` from the new tag. |
-| `SEALED_SECRETS_CHART_VERSION` | Phase 2: pinned `bitnami-labs/sealed-secrets` Helm chart version (e.g. `2.18.4`). **No `v` prefix** — the chart uses bare semver (chart 2.18.4 ships controller app `v0.34.0`, which we pin explicitly in `helm-values.yaml`). The bundled default lives at `tools/cluster/sealed-secrets/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
+| `SEALED_SECRETS_CHART_VERSION` | Phase 2: pinned `bitnami-labs/sealed-secrets` Helm chart version (e.g. `2.18.5`). **No `v` prefix** — the chart uses bare semver (chart 2.18.5 ships controller app `0.36.6`, which we pin explicitly in `helm-values.yaml` — also bare semver, since the `docker.io/bitnami/sealed-secrets-controller` registry stopped using v-prefixed tags around appVersion 0.25.0 / chart 2.14.2; a v-prefix on `image.tag` yields ErrImagePull). The bundled default lives at `tools/cluster/sealed-secrets/chart-version.txt`; if `.env` differs, the install script warns and uses the `.env` value. |
 
 ---
 
@@ -1187,8 +1187,8 @@ local-path-provisioner, or newt, and nothing else depends on it.
   vanilla Deployment that talks to the API server.
 - `KUBECONFIG` exported (the cluster `nix develop` shell does this; if
   you bypassed it, run `just kubeconfig`).
-- `.env` contains `SEALED_SECRETS_CHART_VERSION` (default `2.18.4`,
-  shipping controller app `v0.34.0`).
+- `.env` contains `SEALED_SECRETS_CHART_VERSION` (default `2.18.5`,
+  shipping controller app `0.36.6` — bare semver, no `v` prefix).
 
 ### Install
 

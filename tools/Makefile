@@ -1349,7 +1349,7 @@ test-cluster.local-path-provisioner:
 #   - tools/cluster/sealed-secrets/{install,uninstall,smoke}.sh exist, are
 #     executable, have the bash shebang on line 1, and the TOOLS_DIR preamble
 #     within the first 5 lines.
-#   - helm-values.yaml pins image.tag: v0.34.0 and the restricted-PSA-compatible
+#   - helm-values.yaml pins image.tag: v0.36.6 and the restricted-PSA-compatible
 #     security context (runAsNonRoot, runAsUser 1001, readOnlyRootFilesystem,
 #     allowPrivilegeEscalation false, capabilities.drop: [ALL]) on both pod
 #     and container level; metrics.serviceMonitor.enabled: false.
@@ -1400,8 +1400,18 @@ test-cluster.sealed-secrets:
 		  || { echo "    [FAIL] install.sh missing namespace restricted PSA enforcement label" >&2 ; exit 1 ; } ; \
 		grep -q "chart-version.txt" "$$ASSETS/install.sh" \
 		  || { echo "    [FAIL] install.sh missing chart-version.txt drift warning" >&2 ; exit 1 ; } ; \
-		grep -A2 "^image:" "$$ASSETS/helm-values.yaml" | grep -qE "tag:[[:space:]]+v0.34.0" \
-		  || { echo "    [FAIL] helm-values.yaml missing image.tag: v0.34.0 (must be within 2 lines of the image: key)" >&2 ; exit 1 ; } ; \
+		grep -q "app.kubernetes.io/managed-by=Helm" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh must adopt orphaned cluster-scoped resources (missing app.kubernetes.io/managed-by=Helm label step); without this a previous raw-manifest install of sealed-secrets makes helm upgrade --install fail with invalid ownership metadata on ClusterRole/secrets-unsealer" >&2 ; exit 1 ; } ; \
+		grep -q "meta.helm.sh/release-name=sealed-secrets" "$$ASSETS/install.sh" \
+		  || { echo "    [FAIL] install.sh missing meta.helm.sh/release-name=sealed-secrets annotation in the adopt step" >&2 ; exit 1 ; } ; \
+		for adopt_target in "clusterrole.*secrets-unsealer" "customresourcedefinition.*sealedsecrets.bitnami.com" ; do \
+		  grep -qE "$$adopt_target" "$$ASSETS/install.sh" \
+		    || { echo "    [FAIL] install.sh adopt step does not cover: $$adopt_target" >&2 ; exit 1 ; } ; \
+		done ; \
+		grep -A6 "^image:" "$$ASSETS/helm-values.yaml" | grep -qE "tag:[[:space:]]+0\.36\.6" \
+		  || { echo "    [FAIL] helm-values.yaml missing image.tag: 0.36.6 (must be within 6 lines of the image: key; matches chart 2.18.5 appVersion)" >&2 ; exit 1 ; } ; \
+		grep -A6 "^image:" "$$ASSETS/helm-values.yaml" | grep -qE "tag:[[:space:]]+v[0-9]" \
+		  && { echo "    [FAIL] helm-values.yaml image.tag has a v-prefix; the docker.io/bitnami/sealed-secrets-controller registry uses BARE semver tags (e.g. 0.36.6, not v0.36.6). v-prefix → ErrImagePull." >&2 ; exit 1 ; } || true ; \
 		grep -q "runAsNonRoot: true" "$$ASSETS/helm-values.yaml" \
 		  || { echo "    [FAIL] helm-values.yaml missing runAsNonRoot: true" >&2 ; exit 1 ; } ; \
 		grep -qE "runAsUser:[[:space:]]+1001" "$$ASSETS/helm-values.yaml" \

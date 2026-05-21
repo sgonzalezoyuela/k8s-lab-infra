@@ -3,8 +3,8 @@
     "projectName": "a3c-lab-4",
     "goal": "Automate Proxmox VM provisioning, Talos install, and K8s cluster configuration (MetalLB, cert-manager with own CA, Longhorn) for a small cluster (1 CP + 1 worker, expandable).",
     "createdAt": "2026-05-06T13:45:51.534Z",
-    "updatedAt": "2026-05-20T17:28:10.420Z",
-    "version": 48,
+    "updatedAt": "2026-05-21T00:33:44.180Z",
+    "version": 50,
     "tddMode": "recommended"
   },
   "features": [
@@ -389,7 +389,7 @@
       "description": "Install rancher/local-path-provisioner v0.0.31 with /var/local-path-provisioner host backing via a Talos kubelet extraMount; configure local-path as the cluster's default StorageClass.",
       "module": "cluster",
       "priority": 15,
-      "status": "implemented",
+      "status": "passing",
       "acceptance": [
         "tools/cluster/local-path-provisioner/{install.sh,uninstall.sh,smoke.sh,kustomization.yaml,version.txt} exist; *.sh are executable and start with #!/usr/bin/env bash shebang and the ${TOOLS_DIR:?...} preamble within the first 5 lines.",
         "tools/cluster/local-path-provisioner/manifests/local-path-storage.yaml is the vendored upstream rancher/local-path-provisioner manifest, checked in verbatim from the LOCAL_PATH_PROVISIONER_VERSION tag (the file contains image: rancher/local-path-provisioner:v0.0.31 and the upstream-default ConfigMap named local-path-config).",
@@ -417,11 +417,11 @@
       "version": 1,
       "companionFile": "cluster.local-path-provisioner.md",
       "createdAt": "2026-05-13T16:36:39.186Z",
-      "updatedAt": "2026-05-13T16:52:53.487Z"
+      "updatedAt": "2026-05-21T00:33:44.180Z"
     },
     {
       "id": "cluster.sealed-secrets",
-      "description": "Install bitnami-labs/sealed-secrets chart 2.18.4 (controller v0.34.0) in a dedicated sealed-secrets namespace with restricted PSA; controller auto-generates its sealing keypair on first start.",
+      "description": "Install bitnami-labs/sealed-secrets chart 2.18.5 (controller 0.36.6, bare-semver image tag) in a dedicated sealed-secrets namespace with restricted PSA; controller auto-generates its sealing keypair on first start. install.sh adopts orphaned cluster-scoped resources (ClusterRole/secrets-unsealer, ClusterRoleBinding/sealed-secrets-unsealer, CRD/sealedsecrets.bitnami.com) so a previous raw-manifest install doesn't break helm upgrade.",
       "module": "cluster",
       "priority": 16,
       "status": "passing",
@@ -449,7 +449,7 @@
       "version": 1,
       "companionFile": "cluster.sealed-secrets.md",
       "createdAt": "2026-05-13T16:36:53.937Z",
-      "updatedAt": "2026-05-20T17:28:10.420Z"
+      "updatedAt": "2026-05-20T17:28:49.888Z"
     }
   ]
 }

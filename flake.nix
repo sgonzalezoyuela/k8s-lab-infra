@@ -41,6 +41,7 @@
         opentofu
         yq-go
         jq
+        onefetch
       ];
   in {
     # ---------------------------------------------------------------------
@@ -90,6 +91,7 @@
             test -f "$JUST_JUSTFILE" \
               || echo "warn: $JUST_JUSTFILE not found; are you inside clusters/<name>?"
 
+            ${pkgs.onefetch}/bin/onefetch
             echo
             echo -e "\e[1;32mcluster ${clusterName} (talos ${talosVersion})\e[0m"
             echo

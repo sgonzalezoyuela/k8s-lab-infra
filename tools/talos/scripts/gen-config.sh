@@ -103,6 +103,35 @@ EOF
 done
 
 # ---------------------------------------------------------------------------
+# 6b. Optional: trust an operator-supplied CA on every node.
+#
+# When TALOS_TRUSTED_CA_PATH is set (path relative to the cluster dir, or
+# absolute) and points at a PEM cert/bundle, append a TrustedRootsConfig
+# document (Talos >= v1.8) to each per-node patch. Talos adds these roots to
+# the host trust store used by Talos services and containerd (e.g. pulling
+# images from a registry fronted by this CA). Clusters that leave the var
+# unset are unaffected. Appended here (after envsubst, like the HostnameConfig
+# doc above) so the PEM is copied verbatim and never run through envsubst.
+# ---------------------------------------------------------------------------
+if [ -n "${TALOS_TRUSTED_CA_PATH:-}" ]; then
+  if [ ! -f "$TALOS_TRUSTED_CA_PATH" ]; then
+    echo "gen-config.sh: TALOS_TRUSTED_CA_PATH set but file not found: $TALOS_TRUSTED_CA_PATH" >&2
+    exit 1
+  fi
+  echo "==> adding operator CA to Talos trusted roots: $TALOS_TRUSTED_CA_PATH"
+  for node in cp wk0; do
+    {
+      echo '---'
+      echo 'apiVersion: v1alpha1'
+      echo 'kind: TrustedRootsConfig'
+      echo 'name: operator-trusted-ca'
+      echo 'certificates: |-'
+      sed 's/^/    /' "$TALOS_TRUSTED_CA_PATH"
+    } >> "_out/patches/${node}.yaml"
+  done
+fi
+
+# ---------------------------------------------------------------------------
 # 7. Apply patches to base configs to produce final per-node machine configs.
 # ---------------------------------------------------------------------------
 echo "==> applying patches"

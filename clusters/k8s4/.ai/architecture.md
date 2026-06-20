@@ -56,7 +56,7 @@ The codebase is organized in four layers, each with a clear boundary:
 │   ├── cert-manager/
 │   └── longhorn/
 ├── secrets/               # gitignored (except .gitkeep + README)
-│   ├── ca.crt             # operator-supplied CA cert (cert-manager)
+│   ├── ca.crt             # operator CA cert (cert-manager + Talos trusted root)
 │   └── ca.key             # operator-supplied CA key (cert-manager)
 ├── _out/                  # gitignored, all generated artifacts
 │   ├── talos-schematic-id

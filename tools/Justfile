@@ -29,15 +29,19 @@ init-config:
       fi
     done
 
-# Verify every variable defined in $TOOLS_DIR/.env.example is set and non-empty in .env.
+# Verify every required variable in $TOOLS_DIR/.env.example is set and non-empty in .env (optional vars listed in the recipe are allowed to be empty).
 [no-cd]
 env-check:
     #!/usr/bin/env bash
     set -euo pipefail
+    # Optional vars: documented in .env.example but allowed to be empty in .env
+    # (they gate opt-in features). Space-padded for whole-word matching.
+    optional=" TALOS_TRUSTED_CA_PATH "
     missing=()
     while IFS= read -r line; do
       [[ "$line" =~ ^#.*$ || -z "$line" ]] && continue
       var=$(echo "$line" | cut -d= -f1)
+      [[ "$optional" == *" $var "* ]] && continue
       val=$(grep -E "^${var}=" .env 2>/dev/null | cut -d= -f2- || true)
       [ -z "$val" ] && missing+=("$var")
     done < "$TOOLS_DIR/.env.example"

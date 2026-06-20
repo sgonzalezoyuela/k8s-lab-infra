@@ -1,0 +1,99 @@
+# Persistent remediation for the flannel VXLAN tx-checksum-offload bug.
+#
+# Symptom: the kube-apiserver (on the control-plane node) cannot reach pods that
+# live on another node. Aggregated APIs such as v1beta1.metrics.k8s.io therefore
+# go Available=False (FailedDiscoveryCheck) and `kubectl top` fails with
+# "Metrics API not available". ICMP across the flannel VXLAN overlay works fine,
+# but *TCP* connections black-hole (SYN never gets a reply).
+#
+# Cause: with TX checksum offload enabled on the `flannel.1` VXLAN device, the
+# inner TCP/UDP checksums of the encapsulated packets are deferred to the host
+# NIC. On some hypervisor NIC/driver combinations (observed on this cluster
+# after the Talos worker VM was migrated to a different Proxmox node — virtio-net)
+# that offload corrupts the inner checksum, so the receiver silently drops the
+# segments. ICMP is unaffected because its checksum is always computed in
+# software, which is why ping works but TCP does not.
+#
+# Fix: force software checksumming on flannel.1
+# (`ethtool -K flannel.1 tx-checksum-ip-generic off`) on every node. The setting
+# is per-interface and is lost whenever flannel re-creates flannel.1 (flannel
+# pod restart / node reboot), so this DaemonSet re-applies it continuously.
+#
+# The proper root-cause fix is at the hypervisor (disable the broken offload on
+# the Proxmox host/tap interface, or keep the VM on a host whose NIC handles
+# tunnel checksum offload correctly). This DaemonSet is the host-independent
+# safety net and is cheap to keep running permanently.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: flannel-vxlan-tx-csum-off
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: flannel-vxlan-tx-csum-off
+    app.kubernetes.io/part-of: cluster-networking
+    app.kubernetes.io/managed-by: tools-cluster-script
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flannel-vxlan-tx-csum-off
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flannel-vxlan-tx-csum-off
+        app.kubernetes.io/part-of: cluster-networking
+    spec:
+      # Host network namespace so flannel.1 is visible to ethtool.
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      terminationGracePeriodSeconds: 5
+      # Run on every node, including the tainted control-plane node.
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: ethtool
+          image: alpine:3.20
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: IFACE
+              value: flannel.1
+            - name: INTERVAL
+              value: "15"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              # The node has underlay egress even while the overlay is broken,
+              # so pulling ethtool here is safe during an active incident.
+              while ! command -v ethtool >/dev/null 2>&1; do
+                apk add --no-cache ethtool >/dev/null 2>&1 || sleep 5
+              done
+              echo "[start] $(hostname): keeping tx-checksum-ip-generic off on ${IFACE}"
+              while true; do
+                if ethtool -k "${IFACE}" >/dev/null 2>&1; then
+                  state="$(ethtool -k "${IFACE}" 2>/dev/null | awk -F': ' '/tx-checksum-ip-generic:/{print $2}')"
+                  if [ "${state}" != "off" ]; then
+                    if ethtool -K "${IFACE}" tx-checksum-ip-generic off >/dev/null 2>&1; then
+                      echo "[$(date -u +%FT%TZ)] $(hostname): disabled tx-checksum-ip-generic on ${IFACE} (was ${state:-unknown})"
+                    else
+                      echo "[$(date -u +%FT%TZ)] $(hostname): ERROR disabling offload on ${IFACE}" >&2
+                    fi
+                  fi
+                fi
+                sleep "${INTERVAL}"
+              done
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_ADMIN"]
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
